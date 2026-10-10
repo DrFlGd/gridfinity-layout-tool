@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { useLayoutStore } from '@/core/store/layout';
+import { useSettingsStore } from '@/core/store/settings';
+import { mm } from '@/core/types';
 import type { BinParams } from '@/shared/types/bin';
+import { createTestLayout, resetAllStores } from '@/test/testUtils';
 import type { CommunityPrintSummary } from '@/shared/types/communityPrint';
 import { PrintCostPanel } from './PrintCostPanel';
 
@@ -13,13 +17,16 @@ vi.mock('@/shared/utils/communityPrintCost', async (importOriginal) => {
   return { ...actual, estimateCommunityPrint: estimate };
 });
 
-const bed = vi.hoisted(() => ({ width: 256, depth: 256 }));
-vi.mock('@/core/store/settings', () => ({
-  useSettingsStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      settings: { defaultPrintBedSize: bed.width, defaultPrintBedDepth: bed.depth },
+// Seeded directly rather than through setPrintBedSize, which clamps away the
+// zero bed the "unknown" verdict needs.
+function setLayoutBed(width: number, depth?: number): void {
+  useLayoutStore.setState({
+    layout: createTestLayout({
+      printBedSize: mm(width),
+      ...(depth === undefined ? {} : { printBedDepth: mm(depth) }),
     }),
-}));
+  });
+}
 
 const PARAMS = { width: 2, depth: 3, height: 6 } as unknown as BinParams;
 const METRICS = { width: 83.5, depth: 125.5, height: 42, gridUnitMm: 42 };
@@ -40,8 +47,8 @@ function summary(overrides: Partial<CommunityPrintSummary> = {}): CommunityPrint
 
 beforeEach(() => {
   vi.clearAllMocks();
-  bed.width = 256;
-  bed.depth = 256;
+  resetAllStores();
+  setLayoutBed(256, 256);
   estimate.mockReturnValue({ grams: 20, meters: 6.7, minutes: 100 });
 });
 
@@ -90,13 +97,24 @@ describe('PrintCostPanel', () => {
   });
 
   it('warns when the design is larger than the bed, noting rotation was tried', () => {
-    bed.width = 100;
-    bed.depth = 100;
+    setLayoutBed(100, 100);
     render(<PrintCostPanel params={PARAMS} metrics={METRICS} summary={null} />);
 
     expect(screen.getByTestId('cost-bed-too-large')).toBeInTheDocument();
     // Answers the obvious "but what if I turn it?" before it is asked.
     expect(screen.getByText('community.cost.bedHint')).toBeInTheDocument();
+  });
+
+  it('treats a layout with no bed depth as a square bed', () => {
+    setLayoutBed(100);
+    render(<PrintCostPanel params={PARAMS} metrics={METRICS} summary={null} />);
+    expect(screen.getByTestId('cost-bed-too-large')).toBeInTheDocument();
+  });
+
+  it("checks the layout's bed, not the default for new layouts", () => {
+    useSettingsStore.getState().updateSetting('defaultPrintBedSize', 100);
+    render(<PrintCostPanel params={PARAMS} metrics={METRICS} summary={null} />);
+    expect(screen.getByTestId('cost-bed-fits')).toBeInTheDocument();
   });
 
   it('omits the rotation note when the design already fits', () => {
@@ -133,8 +151,7 @@ describe('PrintCostPanel', () => {
     estimate.mockImplementation(() => {
       throw new Error('nope');
     });
-    bed.width = 0;
-    bed.depth = 0;
+    setLayoutBed(0, 0);
 
     render(<PrintCostPanel params={PARAMS} metrics={METRICS} summary={null} />);
 
@@ -186,8 +203,7 @@ describe('PrintCostPanel', () => {
       estimate.mockImplementation(() => {
         throw new Error('nope');
       });
-      bed.width = 0;
-      bed.depth = 0;
+      setLayoutBed(0, 0);
 
       const upright = { width: 2 * 42 - 0.5, depth: 1 * 42 - 0.5, height: 21, gridUnitMm: 42 };
       render(<PrintCostPanel params={PARAMS} metrics={upright} summary={null} gapContext={gap} />);
