@@ -8,7 +8,19 @@
  * tessellation cost. Enable by setting coarseMesh in the return value.
  */
 
-import { mesh, meshEdges, getKernelCapabilities, getShells, unwrap, fuse } from 'brepjs';
+import {
+  compound,
+  fuse,
+  getBounds,
+  getKernelCapabilities,
+  getShells,
+  getSolids,
+  measureVolume,
+  mesh,
+  meshEdges,
+  unwrap,
+} from 'brepjs';
+import type { Bounds3D, Shape3D } from 'brepjs';
 import type { PipelineContext, PipelineStage } from '../types';
 import type { MeshData } from '../../../../bridge/types';
 import { toIndexedMeshData } from '../../utils/mesh';
@@ -18,7 +30,127 @@ import { setLastExportShellCount, setLastSolid } from '../../shapeCache';
 import { paramsFingerprint } from '@/shared/generation/paramsFingerprint';
 import { getSocketMesh, setSocketMesh, socketMeshKey } from '../../socketMeshCache';
 import { keepOuterShell } from '../../utils/outerShell';
+import { copyFaceOrigins } from '../collectOrigins';
 import { EDGE_ANGULAR_TOLERANCE_RAD } from '@/shared/constants/tessellation';
+import { isWasmTrap } from '@/shared/generation/wasmTrap';
+
+const BOUNDS_SLACK_MM = 0.01;
+const VOLUME_SLACK = 1e-3;
+
+function boundsOrNull(shape: Shape3D): Bounds3D | null {
+  try {
+    return getBounds(shape);
+  } catch {
+    return null;
+  }
+}
+
+function volumeOrNaN(shape: Shape3D): number {
+  try {
+    return unwrap(measureVolume(shape));
+  } catch {
+    return Number.NaN;
+  }
+}
+
+function covers(outer: Bounds3D, inner: Bounds3D): boolean {
+  return (
+    outer.xMin <= inner.xMin + BOUNDS_SLACK_MM &&
+    outer.yMin <= inner.yMin + BOUNDS_SLACK_MM &&
+    outer.zMin <= inner.zMin + BOUNDS_SLACK_MM &&
+    outer.xMax >= inner.xMax - BOUNDS_SLACK_MM &&
+    outer.yMax >= inner.yMax - BOUNDS_SLACK_MM &&
+    outer.zMax >= inner.zMax - BOUNDS_SLACK_MM
+  );
+}
+
+/**
+ * Collapse an export body to its outer shell. Additive feature fuses can leave
+ * interior void shells inside an otherwise valid solid, which STL tessellates
+ * as doubled (non-manifold) faces.
+ */
+function collapseForExport(shape: Shape3D): Shape3D {
+  setLastExportShellCount(getShells(shape).length);
+  const outer = keepOuterShell(shape);
+  if (outer !== shape) shape.delete();
+  return outer;
+}
+
+/**
+ * Whether `fused` still holds all of the body and the socket. The kernel's fuse
+ * can report success without that: handed a body it cannot union, it returns
+ * one of the body's solids with the socket gone, or nothing at all, which no
+ * exporter can write. Body and socket only touch, so the union's volume is
+ * their sum. Measuring volume is slow on a patterned body, so it runs only
+ * where geometry can go missing without moving the bounds: a multi-solid body,
+ * or a fuse that came back in several shells.
+ */
+function holdsBodyAndSocket(fused: Shape3D, body: Shape3D, socket: Shape3D): boolean {
+  if (getSolids(fused).length === 0) return false;
+  const fusedBounds = boundsOrNull(fused);
+  const bodyBounds = boundsOrNull(body);
+  const socketBounds = boundsOrNull(socket);
+  if (!fusedBounds || !bodyBounds || !socketBounds) return false;
+  if (!covers(fusedBounds, bodyBounds) || !covers(fusedBounds, socketBounds)) return false;
+  if (getSolids(body).length <= 1 && getShells(fused).length <= 1) return true;
+  const expected = volumeOrNaN(body) + volumeOrNaN(socket);
+  const actual = volumeOrNaN(fused);
+  return (
+    Number.isFinite(expected) && Number.isFinite(actual) && actual >= expected * (1 - VOLUME_SLACK)
+  );
+}
+
+/**
+ * The fused, collapsed body, or null when any step fails or loses part of
+ * either operand. A socket the fuse leaves unjoined is a shell of its own,
+ * which the outer-shell collapse would throw away, so the collapsed result
+ * has to still reach the socket too. Leaves both operands alive.
+ */
+function fuseWhole(body: Shape3D, socket: Shape3D): Shape3D | null {
+  let result: Shape3D | null = null;
+  try {
+    result = unwrap(fuse(body, socket));
+    if (!holdsBodyAndSocket(result, body, socket)) {
+      result.delete();
+      return null;
+    }
+    const socketBounds = getBounds(socket);
+    result = collapseForExport(result);
+    if (covers(getBounds(result), socketBounds)) return result;
+    result.delete();
+    return null;
+  } catch (e) {
+    // A trap leaves the kernel unusable; the worker has to see it to replace
+    // itself, and nothing built after it can be trusted.
+    if (isWasmTrap(e)) throw e;
+    try {
+      result?.delete();
+    } catch {
+      // Already unusable; the compound below does not depend on it.
+    }
+    return null;
+  }
+}
+
+/**
+ * Fuse the deferred socket into the body for export. When the kernel cannot,
+ * export the two side by side in one compound: they meet only at the floor, so
+ * the file carries the whole bin, seam and all, instead of a body without feet.
+ */
+function fuseSocketForExport(body: Shape3D, socket: Shape3D): Shape3D {
+  const fused = fuseWhole(body, socket);
+  if (fused) {
+    body.delete();
+    socket.delete();
+    return fused;
+  }
+  const both = compound([body, socket]) as Shape3D;
+  copyFaceOrigins(both, [body, socket]);
+  body.delete();
+  socket.delete();
+  setLastExportShellCount(getShells(both).length);
+  return both;
+}
 
 export const tessellateStage: PipelineStage = {
   name: 'merge',
@@ -29,7 +161,7 @@ export const tessellateStage: PipelineStage = {
   },
 
   execute(ctx: PipelineContext): PipelineContext {
-    let rawSolid = ctx.solid;
+    const rawSolid = ctx.solid;
     const { dimensions: dim, forExport } = ctx;
     if (!rawSolid) return ctx;
 
@@ -37,40 +169,20 @@ export const tessellateStage: PipelineStage = {
     // watertight solid. The socket is deferred past the feature stage (see
     // shellStage) so feature fuses run on the socket-less body — fusing it
     // earlier made additive features like the label bracket non-manifold
-    // (GH). On failure, leave the socket deferred so the separate-mesh
-    // path below still produces a complete (if seam-split) export rather than
-    // throwing. PREVIEW keeps the socket deferred and meshes it separately.
+    // (GH). PREVIEW keeps the socket deferred and meshes it separately, and
+    // never feeds this solid to an exporter.
+    let solid = rawSolid;
     if (forExport && ctx.deferredSolid) {
-      try {
-        const fused = unwrap(fuse(rawSolid, ctx.deferredSolid));
-        rawSolid.delete();
-        ctx.deferredSolid.delete();
-        rawSolid = fused;
-        ctx = { ...ctx, solid: fused, deferredSolid: null };
-      } catch {
-        // Fuse failed — fall through with the socket still deferred.
-      }
+      solid = fuseSocketForExport(rawSolid, ctx.deferredSolid);
+      ctx = { ...ctx, solid, deferredSolid: null };
+    } else if (forExport) {
+      solid = collapseForExport(rawSolid);
     }
-
-    // Additive feature fuses can leave interior void shells inside an otherwise
-    // valid export solid; STL tessellates them as doubled (non-manifold) faces.
-    // Collapse to the single outer shell so the exported mesh is watertight.
-    // Export only — the preview path meshes the body and deferred socket
-    // separately and never feeds this solid to an exporter.
-    if (forExport) setLastExportShellCount(getShells(rawSolid).length);
-    const solid = forExport ? keepOuterShell(rawSolid) : rawSolid;
-    if (solid !== rawSolid) rawSolid.delete();
 
     // Stamping the params lets `exportBin` tell this solid apart from one left
     // behind by a different design on the same worker (GH). Only meaningful
     // for export passes — a preview solid is regenerated regardless.
-    //
-    // A still-deferred socket on an export pass means the fuse above failed:
-    // this solid is the body WITHOUT its base, complete only in the merged mesh
-    // built below. Leaving it unidentified makes the next export rebuild (and
-    // retry the fuse) instead of reusing a socket-less BREP.
-    const identified = forExport && !ctx.deferredSolid;
-    setLastSolid(solid, forExport, identified ? paramsFingerprint(ctx.params) : null);
+    setLastSolid(solid, forExport, forExport ? paramsFingerprint(ctx.params) : null);
 
     const { tolerance, angularToleranceRad } = computeTessellationTolerances(
       forExport,
