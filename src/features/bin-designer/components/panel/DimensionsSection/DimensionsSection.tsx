@@ -11,6 +11,7 @@ import { Checkbox, IconButton, Stepper } from '@/design-system';
 import { ArrowLeftRightIcon, RulerIcon } from '@/design-system/Icon';
 import { FractionalEdgeToggle } from '@/shared/components/FractionalEdgeToggle';
 import { useResponsive } from '@/shared/hooks/useResponsive';
+import { formatCompactMm } from '@/features/bin-designer/utils/compartmentDimensions';
 import { AssembledHeightBreakdown } from '../AssembledHeightBreakdown';
 import { useDimensionsSection } from './useDimensionsSection';
 
@@ -80,6 +81,21 @@ export function DimensionsSection() {
           {state.widthMm.toFixed(0)} × {state.depthMm.toFixed(0)} × {state.heightMm.toFixed(0)} mm
         </span>
       </div>
+
+      {state.interior && (
+        <div className="space-y-0.5 text-center">
+          <div className="flex items-center justify-center gap-1.5 text-xs text-content-tertiary">
+            <span>{t('binDesigner.interiorDimensions')}</span>
+            <span className="tabular-nums">
+              {formatCompactMm(state.interior.widthMm)} × {formatCompactMm(state.interior.depthMm)}{' '}
+              × {formatCompactMm(state.interior.heightMm)} mm
+            </span>
+          </div>
+          <p className="text-micro text-content-tertiary/70">
+            {t('binDesigner.interiorDimensionsHint')}
+          </p>
+        </div>
+      )}
 
       <AssembledHeightBreakdown />
 

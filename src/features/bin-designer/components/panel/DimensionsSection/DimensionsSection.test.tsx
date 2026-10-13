@@ -28,6 +28,40 @@ describe('DimensionsSection', () => {
     expect(screen.getByText('8 mm')).toBeInTheDocument();
   });
 
+  it('shows the inside size under the outside size', () => {
+    render(<DimensionsSection />);
+    expect(screen.getByText('84 × 84 × 21 mm')).toBeInTheDocument();
+    expect(screen.getByText('Inside')).toBeInTheDocument();
+    expect(screen.getByText('81.1 × 81.1 × 14 mm')).toBeInTheDocument();
+  });
+
+  it('explains what the inside size leaves out in text a touch screen can read', () => {
+    render(<DimensionsSection />);
+    expect(screen.getByText(/before dividers, scoops and label tabs/)).toBeVisible();
+  });
+
+  it('gives a flat base more inside height than a socketed one', () => {
+    useDesignerStore.setState({
+      params: {
+        ...DEFAULT_BIN_PARAMS,
+        base: { ...DEFAULT_BIN_PARAMS.base, style: 'flat' },
+      },
+    });
+    render(<DimensionsSection />);
+    expect(screen.getByText('81.1 × 81.1 × 19.8 mm')).toBeInTheDocument();
+  });
+
+  it('hides the inside size for a solid block, which has no cavity', () => {
+    useDesignerStore.setState({
+      params: {
+        ...DEFAULT_BIN_PARAMS,
+        base: { ...DEFAULT_BIN_PARAMS.base, solid: true },
+      },
+    });
+    render(<DimensionsSection />);
+    expect(screen.queryByText('Inside')).not.toBeInTheDocument();
+  });
+
   it('hides the half-unit edge controls for whole-unit bins', () => {
     render(<DimensionsSection />);
     expect(screen.queryByText('Half-unit edge position')).not.toBeInTheDocument();
