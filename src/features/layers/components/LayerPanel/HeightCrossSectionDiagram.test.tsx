@@ -455,6 +455,38 @@ describe('HeightCrossSectionDiagram', () => {
       expect(screen.getByLabelText('Decrease Layer 1 height')).toBeDisabled();
     });
 
+    it.each([
+      { drawerHeight: 15, heights: [2] },
+      { drawerHeight: 20, heights: [2] },
+      { drawerHeight: 30, heights: [2] },
+      { drawerHeight: 40, heights: [2, 2] },
+    ])(
+      'keeps the active layer controls reachable at minimum height in a $drawerHeight u drawer',
+      ({ drawerHeight, heights }) => {
+        render(
+          <HeightCrossSectionDiagram
+            layers={makeLayers(...heights)}
+            drawerHeight={drawerHeight}
+            activeLayerId={layerId('layer-1')}
+            onLayerClick={vi.fn()}
+            {...defaultProps}
+          />
+        );
+
+        expect(screen.getByLabelText('Increase Layer 1 height')).toBeInTheDocument();
+        expect(screen.getByLabelText('Decrease Layer 1 height')).toBeInTheDocument();
+        if (heights.length > 1) {
+          expect(screen.getByLabelText('Delete Layer 1 layer')).toBeInTheDocument();
+        }
+
+        const area = screen.getByTestId('content-area');
+        const segments = area.querySelectorAll<HTMLElement>('[data-layer-id]');
+        const last = segments[segments.length - 1];
+        const stackBottom = parseFloat(last.style.top) + parseFloat(last.style.height);
+        expect(parseFloat(area.style.height)).toBeCloseTo(stackBottom, 5);
+      }
+    );
+
     it('shows delete button when multiple layers', () => {
       const layers = makeLayers(4, 3);
       render(
