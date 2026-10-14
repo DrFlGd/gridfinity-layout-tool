@@ -136,26 +136,34 @@ export async function getDue(now: number = Date.now()): Promise<OutboxEntry[]> {
 }
 
 /**
- * Mark a successful push. Removes the entry from the outbox. If a
- * newer enqueue arrived between our read and now (e.g. user edited
- * again while we were pushing), the second enqueue's `key` is the
- * same and our delete here would erase it — so callers MUST pass the
- * `modifiedAt` they pushed, and we only delete if the stored entry
- * still matches that mtime. Otherwise the newer enqueue stays.
+ * Mark a successful push of `drained`, the entry the engine read before
+ * sending, which carried the item's state as of send time.
+ *
+ * That covers `drained` whatever its mtime. An entry queued before a change
+ * the engine never heard (a save during the sign-in claim, before it
+ * subscribes) is older than what gets pushed, and matching on mtime alone
+ * would leave it due forever, re-sent back to back.
+ *
+ * An entry that replaced `drained` during the push stays unless it is the
+ * same op at the pushed mtime. Replacement is told by identity, not mtime
+ * order: a clock that steps back can stamp a later save below the pushed
+ * snapshot, and a delete can land on the very millisecond of one.
  */
-export async function markSuccess(
-  kind: SyncKind,
-  id: string,
-  pushedModifiedAt: number
-): Promise<void> {
+export async function markSuccess(drained: OutboxEntry, pushedModifiedAt: number): Promise<void> {
   const db = await outboxDb.get();
   const tx = db.transaction(STORE_NAME, 'readwrite');
   const store = tx.objectStore(STORE_NAME);
-  const current = (await store.get(entryKey(kind, id))) as OutboxEntry | undefined;
-  if (current && current.modifiedAt === pushedModifiedAt) {
-    await store.delete(entryKey(kind, id));
-  }
+  const current = (await store.get(drained.key)) as OutboxEntry | undefined;
+  const covered =
+    current !== undefined &&
+    (isSameEntry(current, drained) ||
+      (current.op === drained.op && current.modifiedAt === pushedModifiedAt));
+  if (covered) await store.delete(drained.key);
   await tx.done;
+}
+
+function isSameEntry(a: OutboxEntry, b: OutboxEntry): boolean {
+  return a.enqueuedAt === b.enqueuedAt && a.modifiedAt === b.modifiedAt && a.op === b.op;
 }
 
 /**
