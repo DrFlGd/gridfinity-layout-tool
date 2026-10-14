@@ -34,9 +34,10 @@ import {
 } from '../shared';
 import type { SideState } from '../shared';
 import type { TextSurface } from '@/features/bin-designer/utils/flatTextContrast';
-import type {
-  LidCompatibilityId,
-  LidCompatibilityIssue,
+import {
+  LID_ISSUES_WITHOUT_DETAIL,
+  type LidCompatibilityId,
+  type LidCompatibilityIssue,
 } from '@/features/bin-designer/utils/lidCompatibility';
 import { LID_RAIL_SIDES, LID_ATTACHMENTS } from '@/features/bin-designer/types';
 import type { TextMode } from '@/features/bin-designer/types';
@@ -84,7 +85,16 @@ function CompatibilityIssue({
   return (
     <li className={`flex items-start gap-1.5 text-label leading-relaxed ${textColor}`}>
       <span className={`mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full ${dotColor}`} />
-      <span className="flex-1">{message}</span>
+      <p className="flex-1">
+        {t(`binDesigner.lid.compat.${issue.id}`, { sides })}
+        {!LID_ISSUES_WITHOUT_DETAIL.has(issue.id) && (
+          <span className="ml-1 inline-flex align-middle">
+            <InfoDot aria-label={t('binDesigner.infoButton')}>
+              <p>{t(`binDesigner.lid.compat.${issue.id}Detail`, { sides })}</p>
+            </InfoDot>
+          </span>
+        )}
+      </p>
       {fixable && (
         <Button
           type="button"
