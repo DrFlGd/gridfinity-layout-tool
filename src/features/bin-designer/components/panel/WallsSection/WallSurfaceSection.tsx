@@ -22,6 +22,7 @@ import { LabelPlatesControls } from '../LabelTabsSection/LabelPlatesControls';
 import { AnchorPicker } from '../../controls/AnchorPicker';
 import {
   Hint,
+  LabelInfo,
   Readout,
   SideSelector,
   SubHeader,
@@ -98,7 +99,11 @@ export function WallSurfaceSection() {
                   max={PATTERN_WEB_THICKNESS_MAX}
                   step={PATTERN_WEB_THICKNESS_STEP}
                   unit="mm"
-                  info={t('binDesigner.walls.pattern.strutWidthHint')}
+                  labelAddon={
+                    <LabelInfo label={t('binDesigner.walls.pattern.strutWidth')}>
+                      {t('binDesigner.walls.pattern.strutWidthHint')}
+                    </LabelInfo>
+                  }
                 />
               </div>
             )}
@@ -155,6 +160,7 @@ export function WallSurfaceSection() {
         checked={state.isWallTextOpen}
         onChange={handlers.toggleWallText}
         disabledReason={state.wallTextDisabledReason}
+        info={t('binDesigner.walls.text.hint')}
         primaryControls={
           <>
             <div className="grid grid-cols-2 gap-2">
@@ -200,9 +206,6 @@ export function WallSurfaceSection() {
                   />
                 </div>
                 <p className="text-label leading-relaxed text-content-tertiary">
-                  {t('binDesigner.walls.text.hint')}
-                </p>
-                <p className="text-label leading-relaxed text-content-tertiary">
                   {t('binDesigner.type.secondLineHint')}
                 </p>
               </>
@@ -215,9 +218,9 @@ export function WallSurfaceSection() {
         checked={state.labelSlotsEnabled}
         onChange={handlers.toggleLabelSlots}
         disabledReason={state.labelSlotsDisabledReason}
+        info={t('binDesigner.walls.labelSlots.hint')}
         primaryControls={
           <>
-            <Hint>{t('binDesigner.walls.labelSlots.hint')}</Hint>
             <div>
               <span className="mb-1 block text-label text-content-tertiary">
                 {t('binDesigner.walls.labelSlots.sides')}

@@ -332,6 +332,9 @@ describe('LidSection', () => {
         lid: { ...DEFAULT_BIN_PARAMS.lid, enabled: true, attachment: 'magnetic' },
       });
       render(<LidSection />);
+      const magnetLine = screen.getByText(/magnet into each corner/).closest('p');
+      if (!magnetLine) throw new Error('expected the magnet line');
+      fireEvent.click(within(magnetLine).getByRole('button'));
       expect(screen.getByText(/relieved 0\.15mm per side/)).toBeInTheDocument();
     });
 
@@ -405,6 +408,7 @@ describe('LidSection', () => {
       render(<LidSection />);
       fireEvent.click(screen.getByRole('switch', { name: 'Separate baseplate (glue-on)' }));
       expect(useDesignerStore.getState().params.lid.separateStackPlate).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'About Separate baseplate (glue-on)' }));
       expect(screen.getByText(/Glue it onto the lid/i)).toBeInTheDocument();
     });
 
@@ -464,6 +468,8 @@ describe('LidSection', () => {
       expect(screen.getByText(/full grid of sockets/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('switch', { name: 'Stacking lip only' }));
       expect(useDesignerStore.getState().params.lid.stackLipOnly).toBe(true);
+      expect(screen.queryByText(/full grid of sockets/i)).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'About Stacking lip only' }));
       expect(screen.getByText(/One lip around the edge/i)).toBeInTheDocument();
     });
 
@@ -904,6 +910,8 @@ describe('LidSection grip relief (#3272)', () => {
     fireEvent.click(dip);
     expect(useDesignerStore.getState().params.lid.grip.binDip).toBe(true);
     expect(screen.getByText(/nothing to locate against/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /About .*dip the bin/i }));
+    expect(screen.getByText(/so a fingertip gets under the lid/)).toBeInTheDocument();
   });
 });
 
