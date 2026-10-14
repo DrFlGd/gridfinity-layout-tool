@@ -6,20 +6,9 @@ import { DEFAULT_BIN_PARAMS } from '../../../constants';
 import { DEFAULT_TRAY_BOTTOM } from '../../../types';
 import type { InteriorCard } from '../../../types';
 
-vi.mock('./InteriorModeCard', () => ({
-  InteriorModeCard: ({
-    card,
-    isExpanded,
-    onSelect,
-  }: {
-    card: InteriorCard;
-    isExpanded: boolean;
-    onSelect: () => void;
-  }) => (
-    <div data-testid={`card-${card}`}>
-      <button onClick={onSelect}>Select {card}</button>
-      {isExpanded && <div data-testid={`expanded-${card}`}>Expanded</div>}
-    </div>
+vi.mock('./InteriorModes', () => ({
+  InteriorModeContent: ({ card }: { card: InteriorCard }) => (
+    <div data-testid={`content-${card}`}>Content</div>
   ),
 }));
 
@@ -39,44 +28,70 @@ describe('InteriorSection', () => {
     mockSetStyle.mockClear();
   });
 
-  it('renders four mode cards', () => {
+  it('offers the four modes as tiles', () => {
     render(<InteriorSection />);
 
-    expect(screen.getByTestId('card-standard')).toBeInTheDocument();
-    expect(screen.getByTestId('card-bento')).toBeInTheDocument();
-    expect(screen.getByTestId('card-slotted')).toBeInTheDocument();
-    expect(screen.getByTestId('card-solid')).toBeInTheDocument();
+    expect(screen.getAllByRole('radio')).toHaveLength(4);
+    expect(screen.getByRole('radiogroup', { name: 'Interior' })).toBeInTheDocument();
   });
 
-  it('expands the selected card', () => {
+  it("shows only the chosen mode's caption and editor", () => {
     render(<InteriorSection />);
 
-    expect(screen.getByTestId('expanded-standard')).toBeInTheDocument();
-    expect(screen.queryByTestId('expanded-bento')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('expanded-slotted')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('expanded-solid')).not.toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Grid Dividers' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
+    expect(screen.getByTestId('content-standard')).toBeInTheDocument();
+    expect(screen.queryByTestId('content-bento')).not.toBeInTheDocument();
   });
 
-  it('calls selectCard when card is selected', () => {
+  it('calls selectCard when a tile is chosen', () => {
     render(<InteriorSection />);
 
-    fireEvent.click(screen.getByText('Select slotted'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Removable Dividers' }));
 
     expect(mockSelectCard).toHaveBeenCalledWith('slotted');
+  });
+
+  it('marks Bento as experimental before it is chosen', () => {
+    render(<InteriorSection />);
+
+    const bento = screen.getByRole('radio', { name: /^Bento/ });
+    expect(bento).toHaveTextContent('Experimental');
+    expect(screen.getByRole('radio', { name: 'Grid Dividers' })).not.toHaveTextContent(
+      'Experimental'
+    );
   });
 
   it('selects bento without touching the style', () => {
     render(<InteriorSection />);
 
-    fireEvent.click(screen.getByText('Select bento'));
+    fireEvent.click(screen.getByRole('radio', { name: /^Bento/ }));
 
     expect(mockSelectCard).toHaveBeenCalledWith('bento');
+    expect(mockSetStyle).not.toHaveBeenCalled();
   });
 
-  describe('Removable card gate', () => {
+  describe('Removable tile gate', () => {
     const initial = useDesignerStore.getState().params;
     afterEach(() => {
       useDesignerStore.setState({ params: initial });
+    });
+
+    it('holds the chosen editor and says why when a custom shape blocks it', () => {
+      useDesignerStore.setState({
+        params: { ...DEFAULT_BIN_PARAMS, cellMask: { cols: 2, rows: 2, cells: [1, 1, 1, 0] } },
+      });
+      render(<InteriorSection />);
+
+      expect(screen.getByRole('radio', { name: 'Grid Dividers' })).toBeDisabled();
+      expect(screen.getByText('Needs a rectangular footprint.')).toBeInTheDocument();
+      expect(screen.getByTestId('content-standard').closest('[inert]')).not.toBeNull();
+      expect(screen.getByRole('radio', { name: 'Custom Cutouts' })).toHaveAttribute(
+        'tabindex',
+        '0'
+      );
     });
 
     it('stays clickable while Solid is the current style', () => {
@@ -89,8 +104,9 @@ describe('InteriorSection', () => {
       });
       render(<InteriorSection />);
 
-      expect(screen.getByTestId('card-slotted').closest('[inert]')).toBeNull();
-      fireEvent.click(screen.getByText('Select slotted'));
+      const removable = screen.getByRole('radio', { name: 'Removable Dividers' });
+      expect(removable).toBeEnabled();
+      fireEvent.click(removable);
       expect(mockSelectCard).toHaveBeenCalledWith('slotted');
     });
 
@@ -107,9 +123,9 @@ describe('InteriorSection', () => {
       });
       render(<InteriorSection />);
 
-      const gate = screen.getByTestId('card-slotted').closest('[inert]');
-      expect(gate).not.toBeNull();
-      expect(gate).toHaveAttribute('title', 'Not available with the lowered Nesting floor');
+      const removable = screen.getByRole('radio', { name: 'Removable Dividers' });
+      expect(removable).toBeDisabled();
+      expect(removable).toHaveAttribute('title', 'Not available with the lowered Nesting floor');
     });
   });
 });
