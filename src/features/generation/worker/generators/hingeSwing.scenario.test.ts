@@ -32,12 +32,14 @@ import {
   sweepSwing,
   swingAxis,
 } from './__kernel-tests__/hingeSwing';
-import { lidZOffset } from './__kernel-tests__/lidSeating';
+import { binLipTopZ, lidZOffset } from './__kernel-tests__/lidSeating';
 import { boundingBox } from './__kernel-tests__/meshAssertions';
 import { DEFAULT_BIN_PARAMS } from '@/features/bin-designer/constants';
 import {
   DEFAULT_LID_HINGE_CONFIG,
   hingeOppositeSide,
+  LID_CORNER_RADIUS,
+  LID_FIT_CLEARANCE,
   LID_HINGE_DETENT_COVERAGE,
   LID_HINGE_FACE_RELIEF_MM,
   LID_HINGE_PIN_MM,
@@ -100,6 +102,14 @@ function hingeParams(
       hinge: { ...DEFAULT_LID_HINGE_CONFIG, ...hinge },
     },
   };
+}
+
+/** A lid whose skirt reaches well below the axis, where the trim plane runs shallow. */
+function tallHingeParams(): BinParams {
+  return hingeParams(
+    { height: 8, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 20 } },
+    { side: 'back', catchMode: 'none' }
+  );
 }
 
 /** The same design with the hinge swapped for a plain friction lid. */
@@ -594,6 +604,197 @@ describe('hinged lid', () => {
     } finally {
       lid.delete();
     }
+  }, 600_000);
+
+  it("keeps a tall lid's side walls whole inboard of the hinge wall", async () => {
+    // Extra height drops the stop corner far below the axis, which tilts the
+    // trim plane toward flat, so unbounded it carves a wedge out of both side
+    // walls. The probe is everything inboard of the lid's cavity face, above the
+    // rim and below the barrels, against the same lid with no hinge.
+    const { box } = await import('brepjs');
+    const { buildLid } = await import('./lidBuilder');
+    const params = tallHingeParams();
+    const axis = swingAxis(params, 0, 0);
+    if (!axis) throw new Error('expected an axis');
+    const outer = (params.depth * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2;
+    const yHi = outer - (LID_CORNER_RADIUS - LID_FIT_CLEARANCE) - 0.05;
+    const yLo = yHi - 30;
+    const zLo = binLipTopZ(params) + 1;
+    const zHi = axis.z - 3.5;
+    const xSpan = params.width * params.gridUnitMm + 2;
+    const probe = box(xSpan, yHi - yLo, zHi - zLo, {
+      at: [0, (yLo + yHi) / 2, (zLo + zHi) / 2],
+    });
+    const inProbe = async (p: BinParams): Promise<number> => {
+      const lid = buildLid(p);
+      try {
+        return await seatedOverlapMm3(probe, lid, lidZOffset(p));
+      } finally {
+        lid.delete();
+      }
+    };
+    try {
+      const plain = await inProbe(control(params));
+      expect(plain).toBeGreaterThan(1000);
+      expect(Math.abs((await inProbe(params)) - plain)).toBeLessThan(CONTACT_FLOOR_MM3);
+    } finally {
+      probe.delete();
+    }
+  }, 600_000);
+
+  it('swings clear and stops at the designed stop with extra lid height', async () => {
+    const params = tallHingeParams();
+    const { geometry } = planHingeLid(params);
+    if (!geometry) throw new Error('expected hinge geometry');
+    const { bin, lid, dz } = await buildSolids(params);
+    const axis = swingAxis(params, 0, 0);
+    if (!axis) throw new Error('expected an axis');
+    try {
+      const worst = (
+        await sweepSwing(bin, lid, axis, dz, [0, 5, 10, 20, 40, 60, 80, 95, 100])
+      ).reduce((a, b) => (b.mm3 > a.mm3 ? b : a));
+      expect(worst.mm3).toBeLessThan(CONTACT_FLOOR_MM3);
+
+      const corner = (
+        await sweepSwing(bin, lid, axis, dz, [2, 5, 8, 10, 12, 15, 18, 20, 25, 30])
+      ).reduce((a, b) => (b.mm3 > a.mm3 ? b : a));
+      expect(corner.mm3).toBeLessThan(CORNER_CONTACT_FLOOR_MM3);
+
+      const contact = await firstContactAngle(
+        bin,
+        lid,
+        axis,
+        dz,
+        [100, 102, 104, 106, 108, 110, 112, 115, 120, 130],
+        STOP_CONTACT_FLOOR_MM3
+      );
+      expect(contact).not.toBeNull();
+      if (contact === null) return;
+      expect(contact).toBeGreaterThanOrEqual(geometry.stopAngleDeg);
+      expect(contact).toBeLessThan(geometry.stopAngleDeg + 10);
+    } finally {
+      lid.delete();
+    }
+  }, 600_000);
+
+  it('lifts a tall lid out of the latch-side lip instead of dragging across it', async () => {
+    // With the axis well above the rim, the plug on the latch wall moves out
+    // nearly as fast as it rises and crosses the lip's vertical face within
+    // the first two degrees. Sampled finely here because the sweeps above
+    // start at 2°, past the whole event. A one-unit-deep bin is the worst
+    // case: its latch wall is closest to the axis, and with 50mm of extra
+    // height the axis sits higher above the rim than that, so the cut starts
+    // at the rim. A taller height unit raises the axis the same way extra
+    // height does. A ten-unit-deep lid puts the latch wall further from the
+    // axis than the hinge's trim cutters reach.
+    const over = { enabled: true, left: 0, right: 2, front: 0, back: 3 };
+    const cases: ReadonlyArray<readonly [string, BinParams]> = [
+      ['2 deep', { ...tallHingeParams(), depth: 2 }],
+      ['1 deep', { ...tallHingeParams(), depth: 1 }],
+      [
+        '1 deep, 50mm',
+        hingeParams(
+          { height: 8, depth: 1, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 50 } },
+          { catchMode: 'none' }
+        ),
+      ],
+      ['10mm unit', hingeParams({ heightUnitMm: 10, height: 6 }, { catchMode: 'none' })],
+      [
+        '10 deep',
+        hingeParams(
+          { height: 8, width: 2, depth: 10, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 20 } },
+          { catchMode: 'none' }
+        ),
+      ],
+      ...(['front', 'left', 'right'] as const).map(
+        (side) =>
+          [
+            `${side}, overhung`,
+            hingeParams(
+              { height: 8, overhang: over, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 20 } },
+              { side, catchMode: 'none' }
+            ),
+          ] as const
+      ),
+    ];
+    for (const [name, params] of cases) {
+      const { bin, lid, dz } = await buildSolids(params);
+      const shift = overhangExpansion(resolveOverhang(params.overhang));
+      const axis = swingAxis(params, shift.offsetX, shift.offsetY);
+      if (!axis) throw new Error('expected an axis');
+      try {
+        const worst = (
+          await sweepSwing(bin, lid, axis, dz, [0.25, 0.5, 0.75, 1, 1.5, 2, 3])
+        ).reduce((a, b) => (b.mm3 > a.mm3 ? b : a));
+        expect(worst.mm3, name).toBeLessThan(CORNER_CONTACT_FLOOR_MM3);
+      } finally {
+        lid.delete();
+      }
+    }
+  }, 900_000);
+
+  it('builds a snap catch only where the relief leaves its rail a plug to hang from', async () => {
+    // The rail hangs from the latch-side plug. Where the axis sits far enough
+    // above the rim, the relief takes the plug from under it, and the plan
+    // drops the rail rather than leave a loose piece for the export to discard.
+    const { getSolids } = await import('brepjs');
+    const { buildLid } = await import('./lidBuilder');
+    const withCatch = (p: BinParams, catchMode: 'none' | 'detent'): BinParams => ({
+      ...p,
+      lid: { ...p.lid, hinge: { ...DEFAULT_LID_HINGE_CONFIG, catchMode } },
+    });
+    const volumes = async (p: BinParams): Promise<{ snap: number; bare: number }> => {
+      const snap = buildLid(withCatch(p, 'detent'));
+      const bare = buildLid(withCatch(p, 'none'));
+      try {
+        expect(getSolids(snap)).toHaveLength(1);
+        return { snap: await solidVolumeMm3(snap), bare: await solidVolumeMm3(bare) };
+      } finally {
+        snap.delete();
+        bare.delete();
+      }
+    };
+    const fits = await volumes(tallHingeParams());
+    expect(fits.snap).toBeGreaterThan(fits.bare + CONTACT_FLOOR_MM3);
+    const tooTall = await volumes(
+      hingeParams({ height: 8, depth: 1, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 100 } })
+    );
+    expect(Math.abs(tooTall.snap - tooTall.bare)).toBeLessThan(CONTACT_FLOOR_MM3);
+  }, 600_000);
+
+  it('keeps the latch plug seated on the taper unless the cut has to start at the rim', async () => {
+    // The relief starts below the taper's foot while the taper face lifts off
+    // the lip faster than it moves out, so the lid still seats on it. Measured
+    // as the lid inside the lip's taper band on the latch wall, against the
+    // same lid with no hinge.
+    const { box } = await import('brepjs');
+    const { buildLid } = await import('./lidBuilder');
+    const taperBand = async (p: BinParams): Promise<number> => {
+      const outer = (p.depth * p.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2;
+      const half = (p.width * p.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2 - 2 * LID_CORNER_RADIUS;
+      const top = binLipTopZ(p);
+      const band = GRIDFINITY_SPEC.LIP_BIG_TAPER;
+      const probe = box(2 * half, band, band - 0.1, {
+        at: [0, -outer + band / 2, top - band / 2],
+      });
+      const lid = buildLid(p);
+      try {
+        return await seatedOverlapMm3(probe, lid, lidZOffset(p));
+      } finally {
+        lid.delete();
+        probe.delete();
+      }
+    };
+    const footStart = tallHingeParams();
+    const kept = await taperBand(footStart);
+    expect(kept).toBeGreaterThan(50);
+    expect(Math.abs(kept - (await taperBand(control(footStart))))).toBeLessThan(CONTACT_FLOOR_MM3);
+
+    const rimStart = hingeParams(
+      { height: 8, depth: 1, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 50 } },
+      { catchMode: 'none' }
+    );
+    expect(await taperBand(rimStart)).toBeLessThan((await taperBand(control(rimStart))) / 2);
   }, 600_000);
 
   it('stops on every wall, not just the one the frame was written for', async () => {

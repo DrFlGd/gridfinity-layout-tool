@@ -118,6 +118,8 @@
  */
 
 import {
+  LID_CORNER_RADIUS,
+  LID_FIT_CLEARANCE,
   LID_HINGE_AXIS_INSET_MM,
   LID_HINGE_BARREL_RADIUS_MM,
   LID_HINGE_BORE_MM,
@@ -136,6 +138,7 @@ import {
   LID_HINGE_STOP_SECTOR_DEG,
   hingeAxisAboveLipTopMm,
   hingeOppositeSide,
+  hingeStockAxisAboveLipTopMm,
   hingeStopRadiusMm,
   isHingeLid,
   resolveLidHinge,
@@ -241,6 +244,35 @@ export interface HingeGeometry {
    * the lid in its own without either restating the other's origin.
    */
   readonly axisInsetMm: number;
+  /**
+   * How far inboard of the axis (mm) the lid's swing trim may cut: to the lid's
+   * own cavity face, so it takes the hinge wall's shell and nothing past it.
+   *
+   * Inboard of that face the side walls only slide along the bin's side lips
+   * as the lid turns, so the trim has no clearance reason to go further; the
+   * latch wall, which they swing toward, has its own relief
+   * ({@link latchReliefRadiusMm}). Unbounded, a lid with extra height loses a
+   * long wedge from both side walls, because its stop corner sits far below
+   * the axis and that tilts the trim plane toward flat. Without extra height
+   * the plane never reaches this far.
+   */
+  readonly trimInboardMm: number;
+  /**
+   * Whether the lid's latch-side plug is cut back to
+   * {@link latchReliefRadiusMm}: whenever the axis sits higher above the rim
+   * than on a stock lid, from extra height or a taller height unit. Stock
+   * lids keep their exact geometry, so existing designs export unchanged.
+   */
+  readonly relievesLatch: boolean;
+  /** Horizontal distance (mm) from the axis to the latch wall's outer face. */
+  readonly axisToLatchFaceMm: number;
+  /**
+   * Whether a snap catch's rail stays welded to the lid. The rail hangs from
+   * the latch-side plug, and where the axis sits high enough above the rim the
+   * relief takes the plug from under it; the lid is then built without the
+   * rail rather than with a loose piece.
+   */
+  readonly detentFits: boolean;
   /**
    * Depth (mm) below the lip top that a bin knuckle's root reaches for.
    *
@@ -491,6 +523,9 @@ export function planHingeLid(params: BinParams): HingePlan {
   // thickness cancels out of it, which is what lets `hingePlateFloorMm` size
   // the plate from the same number.
   const axisAboveLipTopMm = hingeAxisAboveLipTopMm(params);
+  const fitMm = resolveHingeFitMm(hinge.fitClearanceMm);
+  const relievesLatch = axisAboveLipTopMm > hingeStockAxisAboveLipTopMm() + 1e-6;
+  const axisToLatchFaceMm = crossSpan + 2 * params.wallThickness - axisInsetMm;
 
   return {
     rejection: null,
@@ -501,6 +536,13 @@ export function planHingeLid(params: BinParams): HingePlan {
       axisCrossMm,
       axisAboveLipTopMm,
       axisInsetMm,
+      trimInboardMm: LID_CORNER_RADIUS - LID_FIT_CLEARANCE - axisInsetMm,
+      relievesLatch,
+      axisToLatchFaceMm,
+      detentFits:
+        hinge.catchMode !== 'detent' ||
+        !relievesLatch ||
+        detentRootSurvives(axisToLatchFaceMm, axisAboveLipTopMm, fitMm),
       rootDepthBelowLipTopMm: GRIDFINITY_SPEC.LIP_BIG_TAPER,
       barrelRadiusMm: LID_HINGE_BARREL_RADIUS_MM,
       trimTiltDeg:
@@ -514,7 +556,7 @@ export function planHingeLid(params: BinParams): HingePlan {
       stopSectorDeg: LID_HINGE_STOP_SECTOR_DEG,
       boreMm: LID_HINGE_BORE_MM,
       entryBoreMm: LID_HINGE_ENTRY_BORE_MM,
-      fitMm: resolveHingeFitMm(hinge.fitClearanceMm),
+      fitMm,
       stopAngleDeg: LID_HINGE_STOP_ANGLE_DEG,
       seamChamferMm: LID_HINGE_SEAM_CHAMFER_MM,
       runs,
@@ -522,6 +564,57 @@ export function planHingeLid(params: BinParams): HingePlan {
       catchMode: hinge.catchMode,
     },
   };
+}
+
+/**
+ * Radius (mm) about the axis that lid material below the rim must stay inside
+ * to swing clear of the stacking lip on the latch wall.
+ *
+ * Opening lifts every point of the plug, so it can only meet lip material no
+ * deeper than itself: the top outer corner, the 45° taper, and the corner
+ * where the taper meets the vertical face. The plug's deepest point sits above
+ * the lip's small bottom taper, so nothing below that corner matters. A plug
+ * point that starts outside this radius moves outward faster than it rises
+ * whenever the axis sits well above the rim, and drags across the lip.
+ *
+ * @param axisToLatchFaceMm Horizontal distance from the axis to the latch
+ *   wall's outer face.
+ */
+export function latchReliefRadiusMm(
+  axisToLatchFaceMm: number,
+  axisAboveLipTopMm: number,
+  clearanceMm: number
+): number {
+  const a = axisToLatchFaceMm;
+  const d = axisAboveLipTopMm;
+  const taper = GRIDFINITY_SPEC.LIP_BIG_TAPER;
+  const along = (a - d) / 2;
+  const onTaper = along > 0 && along < taper ? (a + d) / Math.SQRT2 : Infinity;
+  return Math.min(Math.hypot(a, d), Math.hypot(a - taper, d + taper), onTaper) - clearanceMm;
+}
+
+/**
+ * Plug (mm) the latch relief must leave across a snap rail's root for the
+ * rail to stay welded on: two perimeters of a 0.4mm nozzle.
+ */
+const DETENT_ROOT_MM = 0.8;
+
+/**
+ * Whether the latch relief leaves plug above a snap rail. The rail's top meets
+ * the plug's bottom at the lid's cavity face, the plug point nearest the axis
+ * at that depth, so the root survives when that point, moved out by the root
+ * width, still lies inside the relief radius.
+ */
+function detentRootSurvives(
+  axisToLatchFaceMm: number,
+  axisAboveLipTopMm: number,
+  fitMm: number
+): boolean {
+  const root = Math.hypot(
+    axisToLatchFaceMm - (LID_CORNER_RADIUS - LID_FIT_CLEARANCE) + DETENT_ROOT_MM,
+    axisAboveLipTopMm + GRIDFINITY_SPEC.LIP_BIG_TAPER + GRIDFINITY_SPEC.LIP_VERTICAL_PART
+  );
+  return root <= latchReliefRadiusMm(axisToLatchFaceMm, axisAboveLipTopMm, fitMm);
 }
 
 /**
