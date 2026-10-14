@@ -89,6 +89,9 @@ const MESH_CACHE_VERSION = 'v28';
  * assembly-item previews (their own `item` segment) stay warm. The mirror of
  * {@link itemMeshCacheKey}'s segment.
  *
+ * `bin9`: a hinged bin's hinge wall rises to meet a lid with extra height,
+ * whose plate stays at its stock thickness, and both parts' hinges follow a
+ * cavity an overhang moves along the axis.
  * `bin7`: a chamfered pocket inside a shallower one is chamfered at that floor.
  * `bin6`: a path pocket with a curve tighter than its clearance plus entry
  * chamfer keeps both, held back only at that curve, instead of a straight wall.
@@ -104,7 +107,7 @@ const MESH_CACHE_VERSION = 'v28';
  * `bin1`: a lipless bin's sliding-lid entry window no longer ramps through the
  * rim, so its entry corners keep their full wall height.
  */
-const BIN_MESH_REVISION = 'bin8';
+const BIN_MESH_REVISION = 'bin9';
 
 /**
  * Per-kernel revision, bumped when only THAT kernel's output moves for

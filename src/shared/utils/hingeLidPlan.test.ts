@@ -273,6 +273,28 @@ describe('planHingeLid — the axis', () => {
     expect(geometry?.axisAboveLipTopMm).toBeGreaterThan(0);
   });
 
+  it('raises the hinge wall by however far the axis sits above a stock lid', () => {
+    const plan = (over: Partial<BinParams>, extraHeightMm = 0) => {
+      const { geometry } = planHingeLid(
+        params({ ...over, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm } })
+      );
+      if (!geometry) throw new Error('expected hinge geometry');
+      return geometry;
+    };
+    const stock = plan({});
+    expect(stock.wallRiseMm).toBe(0);
+    expect(stock.axisAboveStopMm).toBe(stock.axisAboveLipTopMm);
+    for (const g of [plan({}, 20), plan({ heightUnitMm: 10 })]) {
+      expect(g.wallRiseMm).toBeCloseTo(g.axisAboveLipTopMm - stock.axisAboveLipTopMm, 9);
+      expect(g.axisAboveStopMm).toBeCloseTo(stock.axisAboveStopMm, 9);
+      expect(g.trimTiltDeg).toBeCloseTo(stock.trimTiltDeg, 9);
+      expect(g.stopRadiusMm).toBeCloseTo(stock.stopRadiusMm, 9);
+    }
+    const short = plan({ heightUnitMm: 6 });
+    expect(short.wallRiseMm).toBe(0);
+    expect(short.axisAboveStopMm).toBe(short.axisAboveLipTopMm);
+  });
+
   it('relieves the latch plug whenever the axis sits above a stock lid, and only then', () => {
     const relieves = (over: Partial<BinParams>, extraHeightMm = 0): boolean | undefined =>
       planHingeLid(params({ ...over, lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm } })).geometry
@@ -281,6 +303,22 @@ describe('planHingeLid — the axis', () => {
     expect(relieves({}, 1)).toBe(true);
     expect(relieves({ heightUnitMm: 10 })).toBe(true);
     expect(relieves({ heightUnitMm: 6 })).toBe(false);
+  });
+
+  it('shifts the hinge along the axis with the cavity, on whichever wall it runs', () => {
+    const along = (side: LidRailSide): number | undefined =>
+      planHingeLid(
+        params({ overhang: { enabled: true, left: 0, right: 4, front: 0, back: 0 } }, { side })
+      ).geometry?.alongOffsetMm;
+    expect(along('back')).toBeCloseTo(2, 9);
+    expect(along('front')).toBeCloseTo(-2, 9);
+    const acrossDepth = (side: LidRailSide): number | undefined =>
+      planHingeLid(
+        params({ overhang: { enabled: true, left: 0, right: 0, front: 0, back: 4 } }, { side })
+      ).geometry?.alongOffsetMm;
+    expect(acrossDepth('left')).toBeCloseTo(2, 9);
+    expect(acrossDepth('right')).toBeCloseTo(-2, 9);
+    expect(planHingeLid(params()).geometry?.alongOffsetMm).toBe(0);
   });
 
   it('keeps a snap rail only while the relief leaves a plug to hang it from', () => {
@@ -316,7 +354,7 @@ describe('planHingeLid — the axis', () => {
     const stock = reach(0);
     expect(stock.reach).toBeLessThan(stock.bound);
     const tall = reach(20);
-    expect(tall.reach).toBeGreaterThan(10 * tall.bound);
+    expect(tall.reach).toBeGreaterThan(tall.bound);
   });
 });
 

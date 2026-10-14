@@ -33,7 +33,7 @@ import {
   swingAxis,
 } from './__kernel-tests__/hingeSwing';
 import { binLipTopZ, lidZOffset } from './__kernel-tests__/lidSeating';
-import { boundingBox } from './__kernel-tests__/meshAssertions';
+import { boundingBox, meshVolume } from './__kernel-tests__/meshAssertions';
 import { DEFAULT_BIN_PARAMS } from '@/features/bin-designer/constants';
 import {
   DEFAULT_LID_HINGE_CONFIG,
@@ -49,7 +49,7 @@ import { overhangExpansion, resolveOverhang } from '@/shared/utils/overhang';
 import { GRIDFINITY_SPEC } from '@/shared/printSettings/gridfinityGeometry';
 import type { BinParams, LidHingeConfig, LidRailSide } from '@/features/bin-designer/types';
 import type { MeshData } from '@/features/generation/bridge/types';
-import type { Shape3D } from 'brepjs';
+import type { Shape3D, ValidSolid } from 'brepjs';
 
 /**
  * Shared-volume floor (mm³).
@@ -405,7 +405,7 @@ describe('hinged lid', () => {
     // here can see: a knuckle welded to the lip and one hanging clear of it
     // bound the same box, carry the same triangles and displace the same
     // volume. The barrel reaches no bin material on its own — the plan's
-    // `rootDepthBelowLipTopMm` has the arithmetic — so this is not a margin
+    // `rootDepthBelowStopMm` has the arithmetic — so this is not a margin
     // being checked, it is the whole joint.
     //
     // The export height asks whether it SURVIVES. The pass that makes a bin
@@ -795,6 +795,289 @@ describe('hinged lid', () => {
       { catchMode: 'none' }
     );
     expect(await taperBand(rimStart)).toBeLessThan((await taperBand(control(rimStart))) / 2);
+  }, 600_000);
+
+  it('closes a tall lid on a raised hinge wall, inside the footprint and lying flat', async () => {
+    // The bin's hinge wall rises with the lid so the stop corner, the lobe
+    // and the plate keep their stock size. Without it the wall stands open up
+    // to the knuckles and the lobes, sized to reach the rim far below, jut out
+    // past the back of the bin.
+    const { box, intersect } = await import('brepjs');
+    const params = tallHingeParams();
+    const { geometry } = planHingeLid(params);
+    if (!geometry) throw new Error('expected hinge geometry');
+    const axis = swingAxis(params, 0, 0);
+    if (!axis) throw new Error('expected an axis');
+    const { bin, lid, dz } = await buildSolids(params);
+    try {
+      const outer = (params.depth * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2;
+      const run = geometry.runs[0];
+      const zLo = binLipTopZ(params) + 0.5;
+      const zHi = axis.z - geometry.barrelRadiusMm - geometry.fitMm - 0.2;
+      const probe = box(run.hi - run.lo, 2.5, zHi - zLo, {
+        at: [(run.lo + run.hi) / 2, outer - 1.25, (zLo + zHi) / 2],
+      });
+      try {
+        const filled = intersect(bin as ValidSolid, probe);
+        if (!filled.ok) throw new Error('expected the wall to fill the probe');
+        try {
+          const share = (await solidVolumeMm3(filled.value)) / (await solidVolumeMm3(probe));
+          expect(share).toBeGreaterThan(0.99);
+        } finally {
+          filled.value.delete();
+        }
+      } finally {
+        probe.delete();
+      }
+
+      expect(await seatedOverlapMm3(bin, lid, dz)).toBeLessThan(CONTACT_FLOOR_MM3);
+      const blocked = await pinObstructionMm3(
+        bin,
+        lid,
+        axis,
+        dz,
+        LID_HINGE_PIN_MM / 2,
+        run.lo,
+        run.hi
+      );
+      expect(blocked).toBeLessThan(CONTACT_FLOOR_MM3);
+    } finally {
+      lid.delete();
+    }
+
+    const hinged = await meshes(params);
+    const plain = await meshes(control(params));
+    const spec = {
+      x: params.width * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE,
+      y: params.depth * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE,
+    };
+    for (const [what, mesh, relief] of [
+      ['bin', hinged.bin, 0],
+      ['lid', hinged.lid, LID_HINGE_FACE_RELIEF_MM],
+    ] as const) {
+      const bb = boundingBox(mesh.vertices);
+      expect({ what, x: +(bb.maxX - bb.minX).toFixed(3) }).toEqual({ what, x: spec.x });
+      expect({ what, y: +(bb.maxY - bb.minY).toFixed(3) }).toEqual({
+        what,
+        y: +(spec.y - relief).toFixed(3),
+      });
+    }
+    expect(+boundingBox(hinged.lid.vertices).maxZ.toFixed(3)).toBe(
+      +boundingBox(plain.lid.vertices).maxZ.toFixed(3)
+    );
+  }, 600_000);
+
+  it('raises the hinge wall only where the rim is, beside a cutout the overhang moved', async () => {
+    // An overhang on one end of the hinge wall moves the cavity, and the
+    // cutout with it, along the axis. The raised wall has to stop at the
+    // cutout's real edges, not where they would be without the overhang. The
+    // right wall runs its axis the other way along Y, so it checks the sign.
+    const { box, intersect } = await import('brepjs');
+    const cutout = {
+      enabled: true,
+      width: 30,
+      depth: 50,
+      alignment: 'center' as const,
+      offset: 0,
+      widthMm: null,
+    };
+    const cases = [
+      {
+        side: 'back' as const,
+        overhang: { enabled: true, left: 0, right: 4, front: 0, back: 0 },
+        // Where a position along the plan's run lands in world coordinates.
+        toWorld: (e: number, shift: { offsetX: number }): number => e + shift.offsetX,
+      },
+      {
+        side: 'right' as const,
+        overhang: { enabled: true, left: 0, right: 0, front: 0, back: 4 },
+        toWorld: (e: number, shift: { offsetY: number }): number => -e + shift.offsetY,
+      },
+    ];
+    for (const c of cases) {
+      const params = hingeParams(
+        {
+          height: 8,
+          overhang: c.overhang,
+          walls: { ...DEFAULT_BIN_PARAMS.walls, enabled: true, [c.side]: cutout },
+          lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 20 },
+        },
+        { side: c.side, catchMode: 'none' }
+      );
+      const { geometry } = planHingeLid(params);
+      if (!geometry) throw new Error('expected hinge geometry');
+      expect(geometry.runs).toHaveLength(2);
+      // The cutout's real edges, moved by the overhang itself rather than by
+      // the plan's own reading of it.
+      const shift = overhangExpansion(resolveOverhang(params.overhang));
+      const ends = [geometry.runs[0].trimHi, geometry.runs[1].trimLo].map((e) =>
+        c.toWorld(e, shift)
+      );
+      const [edgeLo, edgeHi] = [Math.min(...ends), Math.max(...ends)];
+      const axis = swingAxis(params, shift.offsetX, shift.offsetY);
+      if (!axis) throw new Error('expected an axis');
+      const { bin, lid, dz } = await buildSolids(params);
+      const outer = geometry.alongX
+        ? (params.depth * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2 + shift.offsetY
+        : (params.width * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2 + shift.offsetX;
+      const zLo = binLipTopZ(params) + 0.5;
+      const zHi = binLipTopZ(params) + geometry.wallRiseMm - 0.5;
+      const filled = async (lo: number, hi: number): Promise<number> => {
+        const along = (lo + hi) / 2;
+        const across = outer - 1.6;
+        const probe = geometry.alongX
+          ? box(hi - lo, 3, zHi - zLo, { at: [along, across, (zLo + zHi) / 2] })
+          : box(3, hi - lo, zHi - zLo, { at: [across, along, (zLo + zHi) / 2] });
+        try {
+          const shared = intersect(bin as ValidSolid, probe);
+          if (!shared.ok) return 0;
+          try {
+            return (await solidVolumeMm3(shared.value)) / (await solidVolumeMm3(probe));
+          } finally {
+            shared.value.delete();
+          }
+        } finally {
+          probe.delete();
+        }
+      };
+      try {
+        expect(await filled(edgeLo + 0.3, edgeHi - 0.3), c.side).toBeLessThan(0.001);
+        expect(await filled(edgeLo - 2.3, edgeLo - 0.3), c.side).toBeGreaterThan(0.99);
+        expect(await filled(edgeHi + 0.3, edgeHi + 2.3), c.side).toBeGreaterThan(0.99);
+        const worst = (await sweepSwing(bin, lid, axis, dz, [0.5, 2, 10, 40, 80, 100])).reduce(
+          (a, b) => (b.mm3 > a.mm3 ? b : a)
+        );
+        expect(worst.mm3, c.side).toBeLessThan(CONTACT_FLOOR_MM3);
+        for (const run of geometry.runs) {
+          const span = [run.lo, run.hi].map((e) => c.toWorld(e, shift));
+          const blocked = await pinObstructionMm3(
+            bin,
+            lid,
+            axis,
+            dz,
+            LID_HINGE_PIN_MM / 2,
+            Math.min(...span),
+            Math.max(...span)
+          );
+          expect(blocked, c.side).toBeLessThan(CONTACT_FLOOR_MM3);
+        }
+      } finally {
+        lid.delete();
+      }
+    }
+  }, 900_000);
+
+  it('steps the raised wall back to the bin wall at 45 degrees under the lip', async () => {
+    // The wall reaches further into the cavity than the lip's base, so below
+    // the lip it has to slope back at 45° or print over air.
+    const { box, intersect } = await import('brepjs');
+    const params = tallHingeParams();
+    const { geometry } = planHingeLid(params);
+    if (!geometry) throw new Error('expected hinge geometry');
+    const { bin, lid } = await buildSolids(params);
+    lid.delete();
+    const outer = (params.depth * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE) / 2;
+    const lipBase = binLipTopZ(params) - GRIDFINITY_SPEC.LIP_HEIGHT;
+    const run = geometry.runs[0];
+    const share = async (insetLo: number, insetHi: number, z: number): Promise<number> => {
+      const probe = box(10, insetHi - insetLo, 0.2, {
+        at: [(run.lo + run.hi) / 2, outer - (insetLo + insetHi) / 2, z],
+      });
+      try {
+        const shared = intersect(bin as ValidSolid, probe);
+        if (!shared.ok) return 0;
+        try {
+          return (await solidVolumeMm3(shared.value)) / (await solidVolumeMm3(probe));
+        } finally {
+          shared.value.delete();
+        }
+      } finally {
+        probe.delete();
+      }
+    };
+    // Half a millimetre under the lip's base the wall's inner face has come
+    // back half a millimetre: solid just outboard of that line, open inboard.
+    const face = geometry.raisedWallMm - 0.5;
+    expect(await share(face - 0.3, face - 0.1, lipBase - 0.5)).toBeGreaterThan(0.99);
+    expect(await share(face + 0.1, face + 0.3, lipBase - 0.5)).toBeLessThan(0.001);
+  }, 600_000);
+
+  it('keeps the raised wall inside a taper that leans in under the lip', async () => {
+    // A wall too short to carry the lip's support skirt leans in from right
+    // under the lip, where the raised wall's 45° foot hangs: on the hinge wall,
+    // and on the side wall its ends run into. Every slice of the bin down there
+    // has to stay inside the same bin without the hinge, or the foot prints
+    // over air.
+    const { box, getBounds, intersect } = await import('brepjs');
+    const taper = {
+      enabled: true,
+      profile: 'chamfer' as const,
+      bandHeight: 9,
+      left: 8,
+      right: 0,
+      front: 0,
+      back: 8,
+    };
+    const params = hingeParams(
+      {
+        height: 1,
+        overhang: { enabled: true, left: 8, right: 0, front: 0, back: 8, taper },
+        lid: { ...DEFAULT_BIN_PARAMS.lid, extraHeightMm: 20 },
+      },
+      { side: 'back', catchMode: 'none' }
+    );
+    const { geometry } = planHingeLid(params);
+    if (!geometry) throw new Error('expected hinge geometry');
+    expect(geometry.wallRiseMm).toBeGreaterThan(0);
+    const lipBase = binLipTopZ(params) - GRIDFINITY_SPEC.LIP_HEIGHT;
+    const depths = [0.3, 0.7, 1.1, 1.5, 1.9];
+    const slices = async (p: BinParams): Promise<{ minX: number; maxY: number }[]> => {
+      const { bin, lid } = await buildSolids(p);
+      lid.delete();
+      const out: { minX: number; maxY: number }[] = [];
+      for (const d of depths) {
+        const slab = box(400, 400, 0.1, { at: [0, 0, lipBase - d] });
+        try {
+          const shared = intersect(bin as ValidSolid, slab);
+          if (!shared.ok) throw new Error(`no bin at ${d}mm under the lip`);
+          try {
+            const b = getBounds(shared.value);
+            out.push({ minX: b.xMin, maxY: b.yMax });
+          } finally {
+            shared.value.delete();
+          }
+        } finally {
+          slab.delete();
+        }
+      }
+      return out;
+    };
+    const hinged = await slices(params);
+    const plain = await slices(control(params));
+    hinged.forEach((s, i) => {
+      expect(s.maxY, `back wall, ${depths[i]}mm under the lip`).toBeLessThan(plain[i].maxY + 0.01);
+      expect(s.minX, `left wall, ${depths[i]}mm under the lip`).toBeGreaterThan(
+        plain[i].minX - 0.01
+      );
+    });
+  }, 600_000);
+
+  it('exports the raised wall and its knuckles with a tall lid', async () => {
+    // The export keeps only the outer shell, so anything the wall or a root
+    // failed to weld to would drop out of the file while the preview showed it.
+    const params = tallHingeParams();
+    const { geometry } = planHingeLid(params);
+    if (!geometry) throw new Error('expected hinge geometry');
+    const exported = (p: BinParams): MeshData => getGenerateBin()(p, undefined, true);
+    const tall = exported(params);
+    const plain = exported(control(params));
+    const along =
+      params.width * params.gridUnitMm - GRIDFINITY_SPEC.TOLERANCE - 2 * LID_CORNER_RADIUS;
+    const wall = geometry.raisedWallMm * geometry.wallRiseMm * along;
+    expect(Math.abs(meshVolume(tall)) - Math.abs(meshVolume(plain))).toBeGreaterThan(wall / 2);
+    expect(boundingBox(tall.vertices).maxZ - boundingBox(plain.vertices).maxZ).toBeGreaterThan(
+      geometry.wallRiseMm
+    );
   }, 600_000);
 
   it('stops on every wall, not just the one the frame was written for', async () => {

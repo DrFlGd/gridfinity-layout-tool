@@ -151,7 +151,7 @@ function knuckleSolid(
  * The knuckle's root: the material that holds it on the bin.
  *
  * Load-bearing, not a fillet. The barrel touches the bin nowhere at all — see
- * {@link HingeGeometry.rootDepthBelowLipTopMm} — so a knuckle fused on without
+ * {@link HingeGeometry.rootDepthBelowStopMm} — so a knuckle fused on without
  * this is a free-floating cylinder, and `keepOuterShell` deletes it from every
  * export as a stray shell.
  *
@@ -173,7 +173,7 @@ function knuckleRootSolid(
   const cy = axisCross(g, frame);
   const cz = frame.axisZ;
   const outerY = cy + g.barrelRadiusMm;
-  const footZ = cz - g.axisAboveLipTopMm - g.rootDepthBelowLipTopMm;
+  const footZ = cz - g.axisAboveStopMm - g.rootDepthBelowStopMm;
   const section = draw([cy, footZ])
     .lineTo([cy, cz])
     .lineTo([outerY, cz])
@@ -326,10 +326,20 @@ function halfSpaceThroughAxis(
   return scope.register(translate(prism, [lo - COPLANAR_MARGIN, 0, 0]));
 }
 
-/** Apply the canonical→chosen-wall rotation, if there is one. */
-function orient(scope: DisposalScope, shape: Shape3D, rotationDeg: number): Shape3D {
-  if (rotationDeg === 0) return shape;
-  return scope.register(rotate(shape, rotationDeg, { axis: [0, 0, 1] }));
+/**
+ * Carry a canonical solid onto the chosen wall: along the axis to the cavity's
+ * centre, then through the wall's rotation.
+ */
+function orient(
+  scope: DisposalScope,
+  shape: Shape3D,
+  g: HingeGeometry,
+  frame: HingeFrame
+): Shape3D {
+  const shifted =
+    g.alongOffsetMm === 0 ? shape : scope.register(translate(shape, [g.alongOffsetMm, 0, 0]));
+  if (frame.rotationDeg === 0) return shifted;
+  return scope.register(rotate(shifted, frame.rotationDeg, { axis: [0, 0, 1] }));
 }
 
 /**
@@ -378,6 +388,12 @@ function stopLobeSolid(
  * bored a hole through thin air and shipped a hinge no pin would enter.
  */
 export interface BinHingeSolids {
+  /**
+   * The raised hinge wall, one per run, NOT yet clipped to the bin's outline:
+   * a run reaches past the wall's ends, so the caller trims each to the
+   * footprint. Fused before everything else, so the pockets cut into it.
+   */
+  readonly walls: readonly Shape3D[];
   /** Pockets for the lid's knuckles. Cut FIRST. */
   readonly notches: readonly Shape3D[];
   /** The bin's own knuckles. Fused SECOND. */
@@ -394,7 +410,12 @@ export interface BinHingeSolids {
  * tangent line — a ring of floating cylinders that is watertight, plausible in
  * every mesh statistic, and snaps off the first time the lid is lifted.
  */
-export function buildBinHingeParts(g: HingeGeometry, frame: HingeFrame): BinHingeSolids {
+export function buildBinHingeParts(
+  g: HingeGeometry,
+  frame: HingeFrame,
+  binWallMm: number
+): BinHingeSolids {
+  const walls: Shape3D[] = [];
   const notches: Shape3D[] = [];
   const additions: Shape3D[] = [];
   const bores: Shape3D[] = [];
@@ -403,10 +424,13 @@ export function buildBinHingeParts(g: HingeGeometry, frame: HingeFrame): BinHing
     // Cloned out of the scope: it releases every intermediate when it closes,
     // and these have to outlive it.
     const put = (built: Shape3D, into: Shape3D[]): void => {
-      into.push(unwrap(clone(orient(scope, built, frame.rotationDeg))));
+      into.push(unwrap(clone(orient(scope, built, g, frame))));
     };
 
     for (const run of g.runs) {
+      if (g.wallRiseMm > 0) {
+        put(raisedWallSolid(scope, g, frame, binWallMm, run.trimLo, run.trimHi), walls);
+      }
       for (const cutter of slotCutters(scope, g, frame, run, 'lid')) put(cutter, notches);
 
       for (const [lo, hi] of bandsFor(run, 'bin')) {
@@ -419,7 +443,50 @@ export function buildBinHingeParts(g: HingeGeometry, frame: HingeFrame): BinHing
     return null;
   });
 
-  return { notches, additions, bores };
+  return { walls, notches, additions, bores };
+}
+
+/**
+ * The hinge wall raised to the stop corner over one run.
+ *
+ * As thick as the lid's shell less the running clearance, so the lid's side
+ * walls, which the trim stops at its cavity face, meet it across that
+ * clearance. Its inner top edge follows the trim plane, offset by the same
+ * clearance: the lid keeps what lies above that plane and the bin what lies
+ * below. Under the lip it steps back to the bin's wall at 45°, so it prints
+ * without support.
+ */
+function raisedWallSolid(
+  scope: DisposalScope,
+  g: HingeGeometry,
+  frame: HingeFrame,
+  binWallMm: number,
+  lo: number,
+  hi: number
+): Shape3D {
+  const outer = frame.outerFaceCrossMm;
+  const inner = outer - g.raisedWallMm;
+  const top = frame.axisZ - g.axisAboveStopMm;
+  const base = frame.axisZ - g.axisAboveLipTopMm - LIP_HEIGHT;
+  // Below the lip only the 45° support, reaching back to the wall's inner face:
+  // outboard of that face the body is already solid. A tapered wall leans in
+  // below the rim, past where this foot reaches; the stage clips it to the loft.
+  const drop = Math.max(0, g.raisedWallMm - binWallMm);
+  let outline = draw([outer, base]).lineTo([outer, top]).lineTo([inner, top]).lineTo([inner, base]);
+  if (drop > 0) {
+    outline = outline.lineTo([outer - binWallMm, base - drop]).lineTo([outer - binWallMm, base]);
+  }
+  const prism = scope.register(sketch(outline.close(), 'YZ').extrude(hi - lo));
+  const block = scope.register(translate(prism, [lo, 0, 0]));
+  const tilt = (g.trimTiltDeg * Math.PI) / 180;
+  const lidSide = scope.register(
+    translate(halfSpaceThroughAxis(scope, g, frame, g.trimTiltDeg + 180, lo, hi), [
+      0,
+      g.fitMm * Math.cos(tilt),
+      g.fitMm * Math.sin(tilt),
+    ])
+  );
+  return scope.register(unwrap(cutAll(block as ValidSolid, [lidSide] as ValidSolid[])));
 }
 
 /** Where the lid's latch wall is, for {@link relieveLatchPlug}. */
@@ -496,9 +563,7 @@ export function relieveLatchPlug(
   // Same ownership contract as `applyLidHinge`: the scope frees the body this
   // replaces, never the one it returns.
   scope.register(lid);
-  return unwrap(
-    cutAll(lid as ValidSolid, [orient(scope, cutter, frame.rotationDeg)] as ValidSolid[])
-  );
+  return unwrap(cutAll(lid as ValidSolid, [orient(scope, cutter, g, frame)] as ValidSolid[]));
 }
 
 /**
@@ -520,11 +585,9 @@ export function applyLidHinge(
   const bores: Shape3D[] = [];
 
   for (const run of g.runs) {
-    cutters.push(
-      orient(scope, trimHalfSpace(scope, g, frame, run.trimLo, run.trimHi), frame.rotationDeg)
-    );
+    cutters.push(orient(scope, trimHalfSpace(scope, g, frame, run.trimLo, run.trimHi), g, frame));
     for (const cutter of slotCutters(scope, g, frame, run, 'bin')) {
-      cutters.push(orient(scope, cutter, frame.rotationDeg));
+      cutters.push(orient(scope, cutter, g, frame));
     }
     for (const [lo, hi] of bandsFor(run, 'lid')) {
       const knuckle = knuckleSolid(scope, g, frame, lo, hi);
@@ -533,11 +596,12 @@ export function applyLidHinge(
         orient(
           scope,
           scope.register(unwrap(fuse(knuckle as ValidSolid, lobe as ValidSolid))),
-          frame.rotationDeg
+          g,
+          frame
         )
       );
     }
-    bores.push(...boresFor(scope, g, frame, run).map((b) => orient(scope, b, frame.rotationDeg)));
+    bores.push(...boresFor(scope, g, frame, run).map((b) => orient(scope, b, g, frame)));
   }
 
   // The trim reaches `run.trimLo/trimHi`, not `run.lo/hi`: those only bound

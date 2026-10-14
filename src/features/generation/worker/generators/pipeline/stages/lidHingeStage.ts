@@ -25,11 +25,22 @@
  * exist. `lidRetentionStage` takes exactly the same pair.
  */
 
-import { cutAll, fuseAll, unwrap } from 'brepjs';
-import type { Shape3D, ValidSolid } from 'brepjs';
-import type { PipelineContext, PipelineStage } from '../types';
+import {
+  cutAll,
+  drawRoundedRectangle,
+  fuseAll,
+  intersect,
+  translate,
+  unwrap,
+  withScope,
+} from 'brepjs';
+import type { DisposalScope, Shape3D, ValidSolid } from 'brepjs';
+import type { BinDimensions, PipelineContext, PipelineStage } from '../types';
 import { checkCancelled } from '../../utils/abort';
 import { buildBinHingeParts } from '../../hingeBarrel';
+import { BOX_CORNER_RADIUS, LIP_HEIGHT, safeSectionRect } from '../../generatorConstants';
+import { hasOverhang, overhangExpansion } from '../../overhang';
+import { buildTaperedOuter } from '../../taperedOuter';
 import { collectOrigins } from '../collectOrigins';
 import { FeatureTag } from '../../featureTags';
 import { planHingeLid } from '@/shared/utils/hingeLidPlan';
@@ -75,27 +86,40 @@ export const lidHingeStage: PipelineStage = {
     const offset = alongX ? dim.innerOffsetY : dim.innerOffsetX;
     const outward = geometry.side === 'back' || geometry.side === 'right' ? 1 : -1;
 
-    const { notches, additions, bores } = buildBinHingeParts(geometry, {
-      outerFaceCrossMm: crossSpan / 2 + ctx.params.wallThickness + outward * offset,
-      axisZ: dim.lipTopZ + geometry.axisAboveLipTopMm,
-      rotationDeg: geometry.rotationDeg,
-    });
-
-    // Tag the PARTS, never the result: `setShapeOrigin` replaces a shape's
-    // whole face-origin map, so tagging the post-boolean solid would stamp the
-    // entire bin — the same trap `slideLidChannelStage` documents.
-    for (const part of [...notches, ...additions, ...bores]) {
-      collectOrigins(part, FeatureTag.LID_HINGE, ctx.originToTag);
-    }
+    const raw = buildBinHingeParts(
+      geometry,
+      {
+        outerFaceCrossMm: crossSpan / 2 + ctx.params.wallThickness + outward * offset,
+        axisZ: dim.lipTopZ + geometry.axisAboveLipTopMm,
+        rotationDeg: geometry.rotationDeg,
+      },
+      ctx.params.wallThickness
+    );
+    const { notches, additions, bores } = raw;
 
     // This stage runs outside a DisposalScope, so every intermediate has to be
     // freed by hand or it leaks on each regeneration — and the designer
     // regenerates on every parameter change.
     let solid: Shape3D = ctx.solid;
+    let walls: Shape3D[] = [];
     const scratch: Shape3D[] = [];
     try {
-      // Pockets, then knuckles, then bores — see `BinHingeSolids`. Boring
-      // before the fuse drills through air and leaves the knuckles solid.
+      walls = raw.walls.length > 0 ? clipToFootprint(raw.walls, dim, ctx.params.wallThickness) : [];
+
+      // Tag the PARTS, never the result: `setShapeOrigin` replaces a shape's
+      // whole face-origin map, so tagging the post-boolean solid would stamp the
+      // entire bin — the same trap `slideLidChannelStage` documents.
+      for (const part of [...walls, ...notches, ...additions, ...bores]) {
+        collectOrigins(part, FeatureTag.LID_HINGE, ctx.originToTag);
+      }
+
+      // Wall, pockets, knuckles, bores — see `BinHingeSolids`. Boring before
+      // the fuse drills through air and leaves the knuckles solid.
+      if (walls.length > 0) {
+        const raised = unwrap(fuseAll([solid, ...walls] as ValidSolid[]));
+        scratch.push(raised);
+        solid = raised;
+      }
       if (notches.length > 0) {
         const pocketed = unwrap(cutAll(solid as ValidSolid, notches as ValidSolid[]));
         scratch.push(pocketed);
@@ -112,7 +136,9 @@ export const lidHingeStage: PipelineStage = {
         solid = drilled;
       }
     } finally {
-      for (const part of [...notches, ...additions, ...bores]) part.delete();
+      for (const part of [...raw.walls, ...walls, ...notches, ...additions, ...bores]) {
+        part.delete();
+      }
       for (const s of scratch) {
         if (s !== solid) s.delete();
       }
@@ -122,3 +148,61 @@ export const lidHingeStage: PipelineStage = {
     return { ...ctx, solid };
   },
 };
+
+/**
+ * Trim each raised wall to the bin's outer outline, the same rounded rectangle
+ * the stacking lip is built on, so its ends follow the corners. A tapered body
+ * leans in below the rim, so there the clip is the body's own loft instead, or
+ * the wall's foot would stand proud of it and print over air. The caller keeps
+ * ownership of the walls it passes in.
+ */
+function clipToFootprint(
+  walls: readonly Shape3D[],
+  dim: BinDimensions,
+  wallThickness: number
+): Shape3D[] {
+  const exp = hasOverhang(dim.overhang) ? overhangExpansion(dim.overhang) : null;
+  const outerW = dim.outerW + (exp?.addW ?? 0);
+  const outerD = dim.outerD + (exp?.addD ?? 0);
+  const offX = exp?.offsetX ?? 0;
+  const offY = exp?.offsetY ?? 0;
+  const zLo = dim.wallTopZ - 2 * LIP_HEIGHT;
+  const zHi = dim.lipTopZ + 1000;
+  const { taper } = dim.overhang;
+
+  return withScope((scope: DisposalScope) => {
+    let footprint: Shape3D;
+    if (taper) {
+      const loft = buildTaperedOuter(
+        scope,
+        outerW,
+        outerD,
+        dim.wallTopZ - dim.baseOffsetZ,
+        wallThickness,
+        taper,
+        offX,
+        offY,
+        zHi - dim.baseOffsetZ
+      );
+      footprint = scope.register(translate(loft, [0, 0, dim.baseOffsetZ]));
+    } else {
+      const { width, depth, radius } = safeSectionRect(outerW, outerD, BOX_CORNER_RADIUS);
+      footprint = scope.register(
+        drawRoundedRectangle(width, depth, radius)
+          .translate(offX, offY)
+          .sketchOnPlane('XY', zLo)
+          .extrude(zHi - zLo)
+      );
+    }
+    const clipped: Shape3D[] = [];
+    try {
+      for (const wall of walls) {
+        clipped.push(unwrap(intersect(wall as ValidSolid, footprint as ValidSolid)));
+      }
+      return clipped;
+    } catch (error) {
+      for (const piece of clipped) piece.delete();
+      throw error;
+    }
+  });
+}
