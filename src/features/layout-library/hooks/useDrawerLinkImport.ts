@@ -1,0 +1,151 @@
+import { useEffect, useRef, useState } from 'react';
+import { createLayoutWithSettings, isRealLayoutId } from '@/core/constants';
+import { isErr } from '@/core/result';
+import { useLayoutStore, useLibraryStore, useSettingsStore, useToastStore } from '@/core/store';
+import {
+  createLayoutEntry,
+  saveLayoutWithMetadata,
+  wasLibrarySeededThisLoad,
+} from '@/core/storage';
+import type { Layout, LayoutId } from '@/core/types';
+import { layoutId as toLayoutId } from '@/core/types';
+import { trackLayoutAction } from '@/shared/analytics/posthog';
+import { useLayoutActivation } from '@/shared/hooks/useLayoutActivation';
+import {
+  buildDrawerLinkLayout,
+  clearDrawerLinkFromURL,
+  isFirstVisitLayout,
+  parseDrawerLink,
+} from '@/shared/utils/drawerLink';
+import type { DrawerLinkSpec } from '@/shared/utils/drawerLink';
+import { setLayoutURL } from '@/shared/utils/url';
+import { useLocale, useTranslation } from '@/i18n';
+
+export interface DrawerLinkImportOptions {
+  /**
+   * Share links, collaboration sessions and other routes own the URL. A link
+   * that arrives while disabled is dropped, not kept for a later route change.
+   */
+  readonly disabled: boolean;
+  /** Rewrite the address to the planner's `/l/{id}` form once the layout opens. */
+  readonly syncLayoutUrl: boolean;
+}
+
+const formatMm = (value: number): string => String(Math.round(value * 10) / 10);
+
+/**
+ * Opens a layout sized to the drawer a `?drawer=` link describes (see
+ * `parseDrawerLink`). The empty layout a first visit seeds is resized in place;
+ * anyone with work of their own gets a new layout and keeps everything else.
+ *
+ * Returns whether the page opened on a drawer link, for prompts that should not
+ * cover an arrival that came for something specific.
+ */
+export function useDrawerLinkImport({ disabled, syncLayoutUrl }: DrawerLinkImportOptions): boolean {
+  const t = useTranslation();
+  const { isReady } = useLocale();
+  const [link] = useState(() => (disabled ? null : parseDrawerLink(window.location.search)));
+  const handled = useRef(false);
+  const { activateLayout } = useLayoutActivation();
+  // Read when the save settles, not when it starts: the user may have left the
+  // planner meanwhile, and rewriting the address then would strand that route.
+  const syncLayoutUrlNow = useRef(syncLayoutUrl);
+  useEffect(() => {
+    syncLayoutUrlNow.current = syncLayoutUrl;
+  }, [syncLayoutUrl]);
+
+  useEffect(() => {
+    // The layout name is stored, so it has to wait for real translations.
+    if (link === null || disabled || !isReady || handled.current) return;
+    handled.current = true;
+    clearDrawerLinkFromURL();
+
+    const addToast = useToastStore.getState().addToast;
+    if (isErr(link)) {
+      addToast(t('toast.drawerLinkInvalid'), 'error');
+      return;
+    }
+
+    void openDrawerLink(
+      link.value,
+      t('layout.drawerLinkName', {
+        width: formatMm(link.value.widthMm),
+        depth: formatMm(link.value.depthMm),
+      }),
+      activateLayout
+    ).then((opened) => {
+      if (opened === 'invalid') {
+        addToast(t('toast.drawerLinkInvalid'), 'error');
+        return;
+      }
+      if (opened === 'failed') {
+        addToast(t('toast.layoutCreateFailed'), 'error');
+        return;
+      }
+      if (syncLayoutUrlNow.current) setLayoutURL(opened.id, opened.layout.name, false);
+      trackLayoutAction('created', 'drawer_link');
+      addToast(
+        t('toast.drawerLinkOpened', {
+          width: opened.layout.drawer.width,
+          depth: opened.layout.drawer.depth,
+        }),
+        'success'
+      );
+    });
+  }, [link, disabled, isReady, activateLayout, t]);
+
+  return link !== null;
+}
+
+async function openDrawerLink(
+  spec: DrawerLinkSpec,
+  fallbackName: string,
+  activate: (layout: Layout, id: LayoutId) => void
+): Promise<{ id: LayoutId; layout: Layout } | 'invalid' | 'failed'> {
+  const library = useLibraryStore.getState().library;
+  const current = useLayoutStore.getState().layout;
+  const reuse = isFirstVisitLayout(library, current, wasLibrarySeededThisLoad());
+  const base = reuse ? current : createLayoutWithSettings(useSettingsStore.getState().settings);
+
+  const built = buildDrawerLinkLayout(base, spec, fallbackName);
+  if (isErr(built)) return 'invalid';
+  const layout = built.value;
+
+  if (reuse) {
+    // On /baseplate the library initializer may link a design to this layout
+    // while it saves. Activating before any await, then saving what the store
+    // holds, keeps that link instead of restoring a copy taken before it.
+    const id = library.activeLayoutId;
+    activate(layout, id);
+    const saved = await saveLayoutWithMetadata(id, useLayoutStore.getState().layout, library);
+    if (isErr(saved)) return 'failed';
+    useLibraryStore.getState().setLibrary(saved.value.library);
+    return { id, layout };
+  }
+
+  // Flush the outgoing layout first: activation would cancel an autosave still
+  // inside its debounce, losing the last edit.
+  let fresh = library;
+  const outgoingId = useLayoutStore.getState().activeLayoutId;
+  if (isRealLayoutId(outgoingId)) {
+    const flushed = await saveLayoutWithMetadata(
+      outgoingId,
+      useLayoutStore.getState().layout,
+      useLibraryStore.getState().library
+    );
+    if (isErr(flushed)) return 'failed';
+    fresh = flushed.value.library;
+    useLibraryStore.getState().setLibrary(fresh);
+  }
+
+  const created = await createLayoutEntry(layout, fresh, {
+    name: layout.name,
+    author: fresh.settings.authorName,
+    activate: true,
+  });
+  if (isErr(created)) return 'failed';
+  useLibraryStore.getState().setLibrary(created.value.library);
+  const id = toLayoutId(created.value.layoutId);
+  activate(created.value.layout, id);
+  return { id, layout: created.value.layout };
+}

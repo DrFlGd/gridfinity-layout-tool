@@ -34,6 +34,12 @@ import type { ReactNode } from 'react';
 import type { Locale, Translations, TranslationVars } from './types';
 
 const fallback: Translations = {
+  // A drawer link stores its layout name once the first locale load settles,
+  // including a failed one, so these must resolve without any locale.
+  'layout.drawerLinkName': 'Drawer {width} × {depth} mm',
+  'toast.drawerLinkOpened': 'Layout sized to your drawer: a {width} × {depth} grid',
+  'toast.drawerLinkInvalid': "That drawer link has a size the planner can't open",
+  'toast.layoutCreateFailed': 'Failed to create layout',
   'errorBoundary.heading': 'Something went wrong',
   'errorBoundary.description': 'The app encountered an unexpected error. Your layout data is safe.',
   'errorBoundary.hint':
@@ -91,6 +97,12 @@ interface LocaleContextValue {
   t: TFunction;
   /** Whether a locale is currently being loaded */
   isLoading: boolean;
+  /**
+   * Whether the first locale load has settled. Until then `t` answers from a
+   * small fallback map and returns most keys verbatim, so text that outlives
+   * the moment (a saved name, a toast) must wait for this.
+   */
+  isReady: boolean;
 }
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
@@ -277,8 +289,8 @@ export function LocaleProvider({ children, initialLocale, onLocaleChange }: Loca
   );
 
   const value = useMemo<LocaleContextValue>(
-    () => ({ locale, setLocale, t, isLoading }),
-    [locale, setLocale, t, isLoading]
+    () => ({ locale, setLocale, t, isLoading, isReady: hasLoadedInitial }),
+    [locale, setLocale, t, isLoading, hasLoadedInitial]
   );
 
   // Show minimal loading state only during explicit locale switches (not initial load).
