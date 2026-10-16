@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadFont, getFont } from 'brepjs/text';
-import { computeWallTextLayouts } from './wallTextPlan';
+import { computeWallTextLayouts, pickByVerticalAnchor, wallTextReadingSign } from './wallTextPlan';
 import type { WallTextDims } from './wallTextPlan';
 import { createTypeMeasurer, type GlyphFont, type TypeMeasurer } from './typePlan';
 import { DEFAULT_BIN_PARAMS } from '@/shared/constants/bin';
@@ -112,5 +112,182 @@ describe('computeWallTextLayouts', () => {
     expect(inkBottom(flat)).toBeGreaterThanOrEqual(BAND);
     const [engraved] = computeWallTextLayouts(params(tapered('engrave')), DIMS, measurer);
     expect(inkBottom(engraved)).toBeLessThan(BAND);
+  });
+});
+
+describe('inside-facing wall text', () => {
+  const inside = (
+    over: Partial<NonNullable<BinParams['surfaceText']>> = {},
+    extra: Partial<BinParams> = {}
+  ): BinParams =>
+    params({
+      surfaceText: {
+        walls: { back: 'CABLES' },
+        wallFaces: { back: 'inside' },
+        ...over,
+      },
+      ...extra,
+    });
+
+  it('reads from inside, so its reading direction is the outside one reversed', () => {
+    for (const side of ['front', 'back', 'left', 'right'] as const) {
+      expect(wallTextReadingSign(side, 'inside')).toBe(-wallTextReadingSign(side));
+    }
+  });
+
+  it('places a left-anchored caption on the reader-left end of the wall', () => {
+    const at = (face: 'inside' | 'outside'): number => {
+      const [layout] = computeWallTextLayouts(
+        params({
+          surfaceText: {
+            walls: { back: 'CABLES' },
+            ...(face === 'inside' ? { wallFaces: { back: 'inside' as const } } : {}),
+            style: { anchor: 'center' },
+            insideStyle: { anchor: 'left' },
+            wallStyles: { back: { anchor: 'left' } },
+          },
+        }),
+        DIMS,
+        measurer
+      );
+      expect(layout.face).toBe(face);
+      return layout.centerU;
+    };
+    // Facing the back wall from inside, its left end is at -X; from outside, +X.
+    expect(at('inside')).toBeLessThan(0);
+    expect(at('outside')).toBeGreaterThan(0);
+  });
+
+  it('stays between the floor and the lip support', () => {
+    const [layout] = computeWallTextLayouts(
+      inside({ insideStyle: { anchor: 'top' } }),
+      DIMS,
+      measurer
+    );
+    expect(layout.centerZ + layout.textH / 2).toBeLessThanOrEqual(DIMS.wallHeight - 2.6);
+    const [low] = computeWallTextLayouts(
+      inside({ insideStyle: { anchor: 'bottom' } }),
+      DIMS,
+      measurer
+    );
+    expect(low.centerZ - low.textH / 2).toBeGreaterThan(2);
+  });
+
+  it('takes the reader-left stretch between dividers for a left anchor', () => {
+    const compartments = {
+      ...DEFAULT_BIN_PARAMS.compartments,
+      cols: 3,
+      rows: 1,
+      cells: [0, 1, 2],
+    };
+    const firstDivider = -DIMS.innerW / 2 + DIMS.innerW / 3;
+    const lastDivider = DIMS.innerW / 2 - DIMS.innerW / 3;
+    const [left] = computeWallTextLayouts(
+      inside({ walls: { back: 'AB' }, insideStyle: { anchor: 'top-left' } }, { compartments }),
+      DIMS,
+      measurer
+    );
+    expect(left.centerU + left.textW / 2).toBeLessThan(firstDivider);
+    const [right] = computeWallTextLayouts(
+      inside({ walls: { back: 'AB' }, insideStyle: { anchor: 'top-right' } }, { compartments }),
+      DIMS,
+      measurer
+    );
+    expect(right.centerU - right.textW / 2).toBeGreaterThan(lastDivider);
+  });
+
+  it('skips a scooped wall and a solid bin, which have no face to cut', () => {
+    const scoop = { ...DEFAULT_BIN_PARAMS.scoop, enabled: true, side: 'back' as const };
+    expect(computeWallTextLayouts(inside({}, { scoop }), DIMS, measurer)).toEqual([]);
+    expect(computeWallTextLayouts(inside(), { ...DIMS, solid: true }, measurer)).toEqual([]);
+  });
+
+  it('keeps a zero-margin caption whose first letter hangs past the margin', () => {
+    const flush = inside({ insideStyle: { anchor: 'left', margin: 0 } });
+    expect(computeWallTextLayouts(flush, DIMS, measurer)).toHaveLength(1);
+  });
+
+  const contained = (l: { plan: { minX: number; maxX: number }; availW: number }): boolean =>
+    l.plan.minX >= -l.availW / 2 - 1e-6 && l.plan.maxX <= l.availW / 2 + 1e-6;
+
+  it('pulls a caption an offset pushes past its edge back inside the region', () => {
+    const [layout] = computeWallTextLayouts(
+      inside({ insideStyle: { anchor: 'left', margin: 0, offset: { x: -5, y: 0 } } }),
+      DIMS,
+      measurer
+    );
+    expect(contained(layout)).toBe(true);
+  });
+
+  it('keeps hanging punctuation inside a region that ends at a divider', () => {
+    const [layout] = computeWallTextLayouts(
+      inside(
+        {
+          walls: { back: 'AB-' },
+          insideStyle: { anchor: 'right', margin: 0, sizeMode: 'fixed', fixedSize: 20 },
+        },
+        {
+          compartments: {
+            ...DEFAULT_BIN_PARAMS.compartments,
+            cols: 2,
+            rows: 1,
+            cells: [0, 1],
+          },
+        }
+      ),
+      DIMS,
+      measurer
+    );
+    expect(contained(layout)).toBe(true);
+  });
+
+  it('slides a caption a large offset shoves off the wall back to its edge', () => {
+    const [layout] = computeWallTextLayouts(
+      inside({ insideStyle: { anchor: 'top-left', offset: { x: 500, y: 0 } } }),
+      DIMS,
+      measurer
+    );
+    expect(contained(layout)).toBe(true);
+    expect(layout.plan.maxX).toBeCloseTo(layout.availW / 2, 6);
+  });
+
+  it('uses the inside style only for walls that face inside', () => {
+    const layouts = computeWallTextLayouts(
+      params({
+        surfaceText: {
+          walls: { front: 'CABLES', back: 'CABLES' },
+          wallFaces: { back: 'inside' },
+          insideStyle: { mode: 'emboss' },
+        },
+      }),
+      DIMS,
+      measurer
+    );
+    const bySide = Object.fromEntries(layouts.map((l) => [l.side, l]));
+    expect(bySide.back.mode).toBe('emboss');
+    expect(bySide.front.mode).not.toBe('emboss');
+  });
+});
+
+describe('pickByVerticalAnchor', () => {
+  const region = (minZ: number, maxZ: number, width = 10) => ({
+    rect: { minU: 0, maxU: width, minZ, maxZ },
+    availW: width,
+    availD: maxZ - minZ,
+  });
+  const tall = region(0, 50);
+  const gap = region(35, 40);
+
+  it('ranks overlapping inside regions by reach, so a short gap cannot outrank a tall one', () => {
+    expect(pickByVerticalAnchor([tall, gap], 'top', 'inside')).toBe(tall);
+    expect(pickByVerticalAnchor([gap, tall], 'bottom', 'inside')).toBe(tall);
+  });
+
+  it('keeps ranking the disjoint outside bands by centre', () => {
+    expect(pickByVerticalAnchor([tall, gap], 'top', 'outside')).toBe(gap);
+  });
+
+  it('takes the largest region for a centred anchor', () => {
+    expect(pickByVerticalAnchor([gap, tall], 'center', 'inside')).toBe(tall);
   });
 });

@@ -17,50 +17,13 @@ import * as THREE from 'three';
 import { useThree } from '@react-three/fiber';
 import { useShallow } from 'zustand/react/shallow';
 import { useDesignerStore } from '@/features/bin-designer/store';
-import { GRIDFINITY } from '@/features/bin-designer/constants/gridfinity';
-import { baseFloorZ, baseWallHeight } from '@/features/bin-designer/utils/binDimensions';
-import { computeInteriorHeight } from '@/shared/utils/scoopCalculations';
-import { computeWallTextLayouts, wallTextReadingSign } from '@/shared/utils/wallTextPlan';
 import { resolveEffectiveFont } from '@/shared/utils/typePlan';
-import type { TypeMeasurer } from '@/shared/utils/typePlan';
-import { contourSegments, outlineToContours } from './ghostTextGeometry';
-import type { WallTextSide } from '@/shared/types/bin';
-import { resolveTextStyle, WALL_TEXT_SIDES } from '@/shared/types/bin';
+import { resolveWallTextStyle, WALL_TEXT_SIDES } from '@/shared/types/bin';
+import { buildWallTextOutline } from './wallTextOutline';
 import { useTypeMeasurer } from '@/features/bin-designer/hooks/useTypeMeasurer';
 
 const GHOST_COLOR = '#22d3ee';
 const GHOST_OPACITY = 0.75;
-/** Lift off the wall face so the outline never z-fights the solid behind it. */
-const FACE_LIFT_MM = 0.06;
-
-/** Yaw (degrees about +Z) turning a front-facing glyph run toward each wall. */
-const WALL_YAW: Record<WallTextSide, number> = { front: 0, back: 180, left: -90, right: 90 };
-
-function wallFaceTranslation(
-  side: WallTextSide,
-  innerW: number,
-  innerD: number,
-  wallThickness: number
-): [number, number] {
-  const outward = wallThickness + FACE_LIFT_MM;
-  switch (side) {
-    case 'front':
-      return [0, -(innerD / 2 + outward)];
-    case 'back':
-      return [0, innerD / 2 + outward];
-    case 'left':
-      return [-(innerW / 2 + outward), 0];
-    case 'right':
-      return [innerW / 2 + outward, 0];
-  }
-}
-
-function buildGeometry(positions: number[]): THREE.BufferGeometry | null {
-  if (positions.length === 0) return null;
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  return geometry;
-}
 
 export function GhostSurfaceText() {
   const { invalidate } = useThree();
@@ -73,11 +36,7 @@ export function GhostSurfaceText() {
     const out = new Set<string>();
     for (const side of WALL_TEXT_SIDES) {
       if ((params.surfaceText?.walls?.[side]?.trim() ?? '') === '') continue;
-      const style = resolveTextStyle(
-        params.textDefaults,
-        params.surfaceText?.style,
-        params.surfaceText?.wallStyles?.[side]
-      );
+      const style = resolveWallTextStyle(params.textDefaults, params.surfaceText, side);
       out.add(resolveEffectiveFont(style.font, style.mode));
     }
     return [...out];
@@ -116,71 +75,4 @@ export function GhostSurfaceText() {
   // double it.
   if (!geometry || !material || generationStatus !== 'generating') return null;
   return <lineSegments geometry={geometry} material={material} />;
-}
-
-/** Positions for every wall caption's outline, in preview world space. */
-function buildWallTextOutline(
-  params: ReturnType<typeof useDesignerStore.getState>['params'],
-  measurer: TypeMeasurer
-): THREE.BufferGeometry | null {
-  const outerW = params.width * params.gridUnitMm - GRIDFINITY.TOLERANCE;
-  const outerD = params.depth * (params.gridUnitMmY ?? params.gridUnitMm) - GRIDFINITY.TOLERANCE;
-  const innerW = outerW - 2 * params.wallThickness;
-  const innerD = outerD - 2 * params.wallThickness;
-  const totalH = params.height * params.heightUnitMm;
-  const wallHeight = baseWallHeight(params.base, totalH);
-  const floorZ = baseFloorZ(params.base, params.heightUnitMm, params.lid, params.cellMask);
-
-  const layouts = computeWallTextLayouts(
-    params,
-    {
-      innerW,
-      innerD,
-      wallHeight,
-      interiorHeight: computeInteriorHeight(
-        wallHeight,
-        params.base.stackingLip,
-        GRIDFINITY.LIP_SMALL_TAPER
-      ),
-      solid: params.base.solid,
-      isSlotted: params.style === 'slotted',
-    },
-    measurer
-  );
-  if (layouts.length === 0) return null;
-
-  const positions: number[] = [];
-  for (const layout of layouts) {
-    const sign = wallTextReadingSign(layout.side);
-    const yaw = (WALL_YAW[layout.side] * Math.PI) / 180;
-    const cos = Math.cos(yaw);
-    const sin = Math.sin(yaw);
-    const [tx, ty] = wallFaceTranslation(layout.side, innerW, innerD, params.wallThickness);
-    // Reading-frame origin of the chosen rect, matching `wallTextBuilder`.
-    const originU = sign * layout.rectCenterU;
-    const originZ = layout.rectCenterZ;
-
-    for (const line of layout.plan.lines) {
-      for (const glyph of line.glyphs) {
-        if (glyph.char.trim() === '') continue;
-        const commands = measurer.outline(glyph.char, layout.plan.font);
-        if (!commands) continue;
-        const contours = outlineToContours(
-          commands,
-          line.fontSize,
-          originU + line.x + glyph.x,
-          originZ + line.baselineY
-        );
-        for (const contour of contours) {
-          const segments = contourSegments(contour);
-          for (let i = 0; i + 1 < segments.length; i += 2) {
-            const px = segments[i];
-            const py = segments[i + 1];
-            positions.push(px * cos + tx, px * sin + ty, floorZ + py);
-          }
-        }
-      }
-    }
-  }
-  return buildGeometry(positions);
 }

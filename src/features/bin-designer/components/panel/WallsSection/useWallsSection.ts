@@ -10,6 +10,8 @@ import type {
   WallPatternType,
   TextAnchor,
   WallPatternSides,
+  WallTextFace,
+  WallTextSide,
 } from '@/features/bin-designer/types';
 import type { Side } from '../shared';
 import {
@@ -21,8 +23,10 @@ import {
   WALL_PATTERN_SIDES,
   WALL_TEXT_SIDES,
   isKumikoPattern,
+  wallTextFace,
 } from '@/features/bin-designer/types';
 import { isPartialMask } from '@/shared/utils/cellMask';
+import { insideWallTextBlock } from '@/shared/utils/insideWallTextPlan';
 import {
   LABEL_PLATE_HEIGHT_MM,
   effectiveLabelSocketClearance,
@@ -51,6 +55,8 @@ export function useWallsSection() {
     clearWallText,
     setSurfaceTextAnchor,
     setSurfaceTextStyle,
+    setWallTextFace,
+    setInsideTextAnchor,
     updateWallLabelSlots,
     currentDesignId,
   } = useDesignerStore(
@@ -64,6 +70,8 @@ export function useWallsSection() {
       clearWallText: s.clearWallText,
       setSurfaceTextAnchor: s.setSurfaceTextAnchor,
       setSurfaceTextStyle: s.setSurfaceTextStyle,
+      setWallTextFace: s.setWallTextFace,
+      setInsideTextAnchor: s.setInsideTextAnchor,
       updateWallLabelSlots: s.updateWallLabelSlots,
       currentDesignId: s.currentDesignId,
     }))
@@ -255,6 +263,21 @@ export function useWallsSection() {
     ? t('binDesigner.walls.text.disabledPolygon')
     : undefined;
 
+  const wallTextFaces = Object.fromEntries(
+    WALL_TEXT_SIDES.map((side) => [side, wallTextFace(params.surfaceText, side)])
+  ) as Record<WallTextSide, WallTextFace>;
+  const anyWallTextInside = WALL_TEXT_SIDES.some((side) => wallTextFaces[side] === 'inside');
+  const insideTextAnchor: TextAnchor = params.surfaceText?.insideStyle?.anchor ?? wallTextAnchor;
+  const insideFaceBlocks = Object.fromEntries(
+    WALL_TEXT_SIDES.map((side) => [side, insideWallTextBlock(params, side)])
+  ) as Record<WallTextSide, ReturnType<typeof insideWallTextBlock>>;
+  // Solid blocks every wall at once, so it is said once for the section; a
+  // scoop blocks its own wall and is said under that wall.
+  const insideFaceSolidNote = WALL_TEXT_SIDES.some((side) => insideFaceBlocks[side] === 'solid')
+    ? t('binDesigner.walls.text.face.solidNote')
+    : undefined;
+  const insideFaceScoopNote = t('binDesigner.walls.text.face.scoopNote');
+
   // Wall-text is gated behind a toggle (matching the sibling cutout/handle
   // sections). The open state is UI-only — deriving it as `local || hasText`
   // means a loaded design with saved wall text opens expanded without a
@@ -411,6 +434,12 @@ export function useWallsSection() {
       wallTextMode,
       hasAnyWallText,
       wallTextDisabledReason,
+      wallTextFaces,
+      anyWallTextInside,
+      insideTextAnchor,
+      insideFaceBlocks,
+      insideFaceSolidNote,
+      insideFaceScoopNote,
       isWallTextOpen,
       labelSlotsEnabled: labelSlots.enabled,
       labelSlotSides: labelSlots.sides,
@@ -431,6 +460,8 @@ export function useWallsSection() {
       handleDividersChange,
       commitWallTextAt,
       setSurfaceTextAnchor,
+      setWallTextFace,
+      setInsideTextAnchor,
       setTextMode,
       toggleWallText,
       toggleLabelSlots,
