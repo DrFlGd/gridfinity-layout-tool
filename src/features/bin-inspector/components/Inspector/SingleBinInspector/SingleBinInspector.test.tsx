@@ -3,7 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { SingleBinInspector } from '@/features/bin-inspector';
 import type { UseBinInspectorReturn } from '@/features/bin-inspector';
 import { createTestBin, createTestLayout, resetAllStores } from '@/test/testUtils';
-import { useHalfGridModeStore } from '@/core/store';
+import { useHalfGridModeStore, useLabsStore } from '@/core/store';
 import { STAGING_ID } from '@/core/constants';
 import { binId, categoryId, gridUnits, heightUnits, layerId } from '@/core/types';
 import type { Category, Layer } from '@/core/types';
@@ -73,6 +73,7 @@ describe('SingleBinInspector', () => {
     },
     updateField: vi.fn(),
     updateCustomProperties: vi.fn(),
+    updateItems: vi.fn(),
     updateMultiCustomProperty: vi.fn(),
     updateMultiCategory: vi.fn(),
     updateMultiHeight: vi.fn(),
@@ -97,6 +98,63 @@ describe('SingleBinInspector', () => {
   beforeEach(() => {
     resetAllStores();
     vi.clearAllMocks();
+  });
+
+  describe('contents', () => {
+    it('lists what the bin holds while the places flag is on', () => {
+      useLabsStore.getState().enableFeature('places');
+      const bin = { ...mockBin, items: [{ id: 'i1', name: 'M3 nuts' }] };
+      const updateItems = vi.fn();
+      render(
+        <SingleBinInspector
+          inspector={createMockInspector({ bin, updateItems })}
+          variant="desktop"
+        />
+      );
+      expect(screen.getByText('Contents')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Remove M3 nuts' }));
+      expect(updateItems).toHaveBeenCalledWith([]);
+    });
+
+    it('keeps an unsaved item with the bin it was typed for', () => {
+      useLabsStore.getState().enableFeature('places');
+      const updateItems = vi.fn();
+      const { rerender } = render(
+        <SingleBinInspector
+          inspector={createMockInspector({ bin: mockBin, updateItems })}
+          variant="desktop"
+        />
+      );
+      fireEvent.change(screen.getByLabelText('Add an item'), { target: { value: 'Washers' } });
+      rerender(
+        <SingleBinInspector
+          inspector={createMockInspector({ bin: { ...mockBin, id: binId('other') }, updateItems })}
+          variant="desktop"
+        />
+      );
+      expect(screen.getByLabelText('Add an item')).toHaveValue('');
+    });
+
+    it('saves an edited item to its own bin when another bin is pressed', () => {
+      useLabsStore.getState().enableFeature('places');
+      const bin = { ...mockBin, items: [{ id: 'i1', name: 'Nuts' }] };
+      const updateItems = vi.fn();
+      render(
+        <SingleBinInspector
+          inspector={createMockInspector({ bin, updateItems })}
+          variant="desktop"
+        />
+      );
+      fireEvent.change(screen.getByLabelText('Nuts'), { target: { value: 'Wing nuts' } });
+      fireEvent.pointerDown(document.body);
+      expect(updateItems).toHaveBeenCalledWith([{ id: 'i1', name: 'Wing nuts' }]);
+    });
+
+    it('leaves the section out while the flag is off', () => {
+      useLabsStore.getState().disableFeature('places');
+      render(<SingleBinInspector inspector={createMockInspector()} variant="desktop" />);
+      expect(screen.queryByText('Contents')).toBeNull();
+    });
   });
 
   describe('rendering', () => {
