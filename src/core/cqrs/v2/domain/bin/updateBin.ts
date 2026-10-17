@@ -10,6 +10,7 @@ import type { Result, ValidationError, LayoutError } from '@/core/result';
 import { ok, err } from '@/core/result';
 import { STAGING_ID, CONSTRAINTS } from '@/core/constants';
 import { canPlaceBin } from '@/shared/utils/validation';
+import { sanitizeBinItems } from '@/shared/utils/binItems';
 import { toPlacementError } from '@/core/store/layout/helpers';
 import { layoutInvalidOperation } from '@/core/result';
 import type { Bin, BinId } from '@/core/types';
@@ -22,6 +23,7 @@ import {
   heightUnits,
 } from '@/core/types';
 import { defineCommand } from '../../defineCommand';
+import { binItemsSchema } from '../../../validation/binItems';
 
 /** Explicit per-placement overhang (mm). `null` clears it (inspector Reset). */
 const overhangSchema = z
@@ -48,6 +50,7 @@ const updatesSchema = z
     label: z.string().max(CONSTRAINTS.LABEL_MAX_LENGTH),
     notes: z.string().max(CONSTRAINTS.NOTES_MAX_LENGTH),
     customProperties: z.record(z.string(), z.string()),
+    items: binItemsSchema,
     linkedDesignId: z.string().nullable(),
     extendToMargin: z.boolean(),
     marginTaper: z.object({
@@ -88,6 +91,7 @@ function brandUpdates(updates: z.infer<typeof updatesSchema>): Partial<Bin> {
   if (updates.label !== undefined) result.label = updates.label;
   if (updates.notes !== undefined) result.notes = updates.notes;
   if (updates.customProperties !== undefined) result.customProperties = updates.customProperties;
+  if (updates.items !== undefined) result.items = sanitizeBinItems(updates.items);
   if (updates.linkedDesignId !== undefined)
     result.linkedDesignId =
       updates.linkedDesignId === null ? undefined : toDesignId(updates.linkedDesignId);

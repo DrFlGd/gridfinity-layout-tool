@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { ok, err } from '@/core/result';
 import { generateBinId, STAGING_ID, CONSTRAINTS } from '@/core/constants';
 import { canPlaceBin } from '@/shared/utils/validation';
+import { sanitizeBinItems } from '@/shared/utils/binItems';
 import { toPlacementError } from '@/core/store/layout/helpers';
 import { validationInvalidLayer } from '@/core/result';
 import type { Bin } from '@/core/types';
@@ -18,6 +19,7 @@ import {
   heightUnits,
 } from '@/core/types';
 import { defineCommand } from '../../defineCommand';
+import { binItemsSchema } from '../../../validation/binItems';
 
 const payloadSchema = z.object({
   layerId: z.string().min(1),
@@ -31,6 +33,7 @@ const payloadSchema = z.object({
   label: z.string().max(CONSTRAINTS.LABEL_MAX_LENGTH),
   notes: z.string().max(CONSTRAINTS.NOTES_MAX_LENGTH),
   customProperties: z.record(z.string(), z.string()).optional(),
+  items: binItemsSchema.optional(),
   linkedDesignId: z.string().optional(),
   pairId: z.string().min(1).optional(),
   pairRole: z.enum(['block', 'rest']).optional(),
@@ -81,8 +84,11 @@ export const addBin = defineCommand({
 
     // Generate the BinId only after validation passes so rejected commands
     // don't burn an id.
+    const { items: rawItems, ...fields } = payload;
+    const items = sanitizeBinItems(rawItems);
     const bin: Bin = {
-      ...payload,
+      ...fields,
+      ...(items ? { items } : {}),
       id: generateBinId(),
       layerId,
       category,
