@@ -2471,14 +2471,14 @@ const en: Record<string, string> = {
   'binDesigner.preview.lidExplodeSlider': 'Lid open/close',
   'binDesigner.overhang.title': 'Overhang',
   'binDesigner.overhang.hint':
-    'Grow the walls outward to fill a drawer gap. The base feet stay put, leaving a flat bottom under the overhang.',
+    'Grow the walls outward to fill a drawer gap. The base feet stay put, so the bottom under the overhang is flat at the top of the base and needs supports to print. On a flat base it rests on the bed.',
   'binDesigner.overhang.side.left': 'Left',
   'binDesigner.overhang.side.right': 'Right',
   'binDesigner.overhang.side.front': 'Front',
   'binDesigner.overhang.side.back': 'Back',
   'binDesigner.overhang.feet': 'Feet under overhang',
   'binDesigner.overhang.feetHint':
-    'Add grid-aligned feet beneath the overhang where they fit to print, instead of a flat bottom.',
+    'Add grid-aligned feet beneath the overhang where it is wide enough to print them, so that part reaches the bed. A narrower overhang still needs supports.',
   'binDesigner.overhang.taper.title': 'Taper walls',
   'binDesigner.overhang.taper.hint':
     "Angle the wall outward above the base so the bin reaches into a drawer's curved sides. The base keeps its overhang width, so the bin still sits flat.",
