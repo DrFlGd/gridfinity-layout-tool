@@ -12,6 +12,8 @@ import { ShareButton } from '@/features/cloud-share/components/ShareButton';
 import { ShareModal } from '@/features/cloud-share/components/ShareModal';
 import { ToolSwitcher } from '@/shared/components/ToolSwitcher';
 import { LayoutQuickSwitch } from '@/features/layout-library';
+import { PlacePath } from '@/features/places/components/PlacePath';
+import { useFeatureFlag } from '@/shared/hooks/useFeatureFlag';
 import { trackEvent } from '@/shared/analytics/posthog';
 import { HeaderSupportLinks } from '@/shared/components/HeaderSupportLinks';
 import { useTranslation } from '@/i18n';
@@ -51,6 +53,7 @@ interface HeaderProps {
 export function Header({ saveStatus }: HeaderProps) {
   const t = useTranslation();
   const { isTablet } = useResponsive();
+  const showPlacePath = useFeatureFlag('places') && !isTablet;
   const { isCollaborative } = useCollabMode();
 
   const layout = useLayoutStore((state) => state.layout);
@@ -105,15 +108,19 @@ export function Header({ saveStatus }: HeaderProps) {
         {/* Divider */}
         <div className="w-px h-6 bg-stroke-subtle" />
 
-        {/* Layout name */}
-        <InlineEditText
-          value={layout.name}
-          onCommit={setName}
-          fallback={DEFAULT_LAYOUT_NAME}
-          maxLength={CONSTRAINTS.NAME_MAX_LENGTH}
-          aria-label={t('header.editLayoutName')}
-          displayClassName="h-8 max-w-[200px]"
-        />
+        <div className="flex min-w-0 flex-col justify-center">
+          {showPlacePath && <PlacePath />}
+          <InlineEditText
+            value={layout.name}
+            onCommit={setName}
+            fallback={DEFAULT_LAYOUT_NAME}
+            maxLength={CONSTRAINTS.NAME_MAX_LENGTH}
+            aria-label={t('header.editLayoutName')}
+            displayClassName={
+              showPlacePath ? 'h-7 max-w-[200px] py-0 text-left' : 'h-8 max-w-[200px]'
+            }
+          />
+        </div>
 
         <LayoutQuickSwitch onManage={() => setShowLayoutManager(true)} />
 
