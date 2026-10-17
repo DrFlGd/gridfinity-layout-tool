@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
+import { Command } from 'cmdk';
+import { Button } from '@/design-system';
+import { PRE_RANKED_VALUE_PREFIX } from '@/shared/utils/commandPaletteFilter';
 import { CommandPalette } from './CommandPalette';
 import {
   useLayoutStore,
@@ -129,6 +132,48 @@ describe('CommandPalette', () => {
       const { container } = render(<CommandPalette open={false} onOpenChange={mockOnOpenChange} />);
 
       expect(container).toBeInTheDocument();
+    });
+  });
+
+  describe('extra results', () => {
+    it('hands them the typed query and a way to close the palette', () => {
+      const extraResults = vi.fn((query: string, close: () => void) => (
+        <Button onClick={close}>{`found ${query}`}</Button>
+      ));
+      const { getByText } = render(
+        <CommandPalette
+          open
+          onOpenChange={mockOnOpenChange}
+          initialQuery="screws"
+          extraResults={extraResults}
+        />
+      );
+      expect(extraResults).toHaveBeenCalledWith('screws', expect.any(Function));
+      getByText('found screws').click();
+      expect(mockOnOpenChange).toHaveBeenCalledWith(false);
+    });
+
+    it('keeps pre-ranked results in their order, above a command the query matches', () => {
+      // cmdk scrolls its first match into view, which jsdom lacks.
+      Element.prototype.scrollIntoView = vi.fn();
+      const { container } = render(
+        <CommandPalette
+          open
+          onOpenChange={mockOnOpenChange}
+          initialQuery="undo"
+          extraResults={() => (
+            <Command.Group heading="Bins">
+              <Command.Item value={`${PRE_RANKED_VALUE_PREFIX}a-long-key-ranked-first`}>
+                first
+              </Command.Item>
+              <Command.Item value={`${PRE_RANKED_VALUE_PREFIX}undo`}>second</Command.Item>
+            </Command.Group>
+          )}
+        />
+      );
+      const items = [...container.querySelectorAll('[cmdk-item]')].map((item) => item.textContent);
+      expect(items.slice(0, 2)).toEqual(['first', 'second']);
+      expect(items.length).toBeGreaterThan(2);
     });
   });
 });

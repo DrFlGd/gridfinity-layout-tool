@@ -14,6 +14,24 @@ for (const [canonical, aliases] of Object.entries(VOCABULARY)) {
   }
 }
 
+function foldForConcepts(text: string): string {
+  return text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+}
+
+/**
+ * Accent-folded aliases for `conceptsNamedIn`; `processLabel` keeps the exact
+ * map. A shared alias keeps the later term, as `ALIAS_MAP` does.
+ */
+const FOLDED_ALIAS_MAP = new Map<string, string>();
+let longestAliasWords = 1;
+for (const [canonical, aliases] of Object.entries(VOCABULARY)) {
+  for (const alias of aliases) {
+    const folded = foldForConcepts(alias);
+    FOLDED_ALIAS_MAP.set(folded, canonical);
+    longestAliasWords = Math.max(longestAliasWords, folded.match(/[\p{L}\p{N}]+/gu)?.length ?? 1);
+  }
+}
+
 // LABEL PROCESSING CACHE
 
 /**
@@ -222,6 +240,32 @@ function cacheResult(key: string, value: LabelData): void {
  */
 export function getCanonicalTerms(): string[] {
   return Object.keys(VOCABULARY).sort();
+}
+
+/**
+ * Canonical terms that `text` names with a whole alias on word boundaries.
+ * Unlike `processLabel`, a word that merely contains an alias names nothing:
+ * "Snail shells" holds "nail" but is not about nails. Accents fold away on
+ * both sides, and each run of words is tried as written, for aliases like
+ * "usb-c", and joined by spaces, so "screws,nuts" still names screws.
+ */
+export function conceptsNamedIn(text: string): string[] {
+  const lower = foldForConcepts(text);
+  const words = [...lower.matchAll(/[\p{L}\p{N}]+/gu)];
+  const found = new Set<string>();
+  for (let start = 0; start < words.length; start++) {
+    const last = Math.min(words.length, start + longestAliasWords);
+    for (let end = start + 1; end <= last; end++) {
+      const run = words.slice(start, end);
+      const final = run[run.length - 1];
+      const asWritten = lower.slice(run[0].index, final.index + final[0].length);
+      const canonical =
+        FOLDED_ALIAS_MAP.get(asWritten) ??
+        FOLDED_ALIAS_MAP.get(run.map((word) => word[0]).join(' '));
+      if (canonical) found.add(canonical);
+    }
+  }
+  return [...found];
 }
 
 /**

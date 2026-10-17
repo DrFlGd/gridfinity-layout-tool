@@ -8,6 +8,7 @@ import { useViewStore } from '@/core/store/view';
 import { useInteractionStore } from '@/core/store/interaction';
 import { useToastStore } from '@/core/store/toast';
 import { useSettingsStore } from '@/core/store/settings';
+import { onRevealBin } from '@/shared/events/revealBin';
 import { useResponsive } from '@/shared/hooks';
 import { BASE_CELL_SIZE, DEFAULT_CATEGORY_COLOR } from '@/core/constants';
 import { getStagingBins } from '@/shared/utils';
@@ -297,6 +298,27 @@ export function Staging() {
     }
     prevBinCountRef.current = currentCount;
   }, [stagingBins.length, isExpanded]);
+
+  // A revealed stashed bin is only visible with the stash open; the second frame
+  // lets the expanded list render before scrolling to it.
+  useEffect(
+    () =>
+      onRevealBin((id) => {
+        const bins = useLayoutStore.getState().layout.bins;
+        if (!getStagingBins(bins).some((bin) => bin.id === id)) return;
+        setIsExpanded(true);
+        setHasToggled(true);
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            const element = document.querySelector(`[data-staging-bin-id="${CSS.escape(id)}"]`);
+            if (!(element instanceof HTMLElement)) return;
+            element.scrollIntoView({ block: 'nearest' });
+            element.focus({ preventScroll: true });
+          });
+        });
+      }),
+    []
+  );
 
   // Toggle handler that persists to settings
   const handleToggleExpand = useCallback(() => {

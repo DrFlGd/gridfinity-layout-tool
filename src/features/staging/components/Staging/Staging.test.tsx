@@ -1,11 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import { Staging } from '@/features/staging/components/Staging';
 import { useLayoutStore } from '@/core/store';
 import { useSelectionStore } from '@/core/store/selection';
 import { useViewStore } from '@/core/store/view';
 import { useInteractionStore } from '@/core/store/interaction';
+import { useSettingsStore } from '@/core/store/settings';
 import { resetAllStores } from '@/test/testUtils';
+import { revealBin } from '@/shared/events/revealBin';
 import { STAGING_ID } from '@/core/constants';
 import { binId, categoryId, gridUnits, heightUnits } from '@/core/types';
 import type { Bin } from '@/core/types';
@@ -40,6 +42,11 @@ vi.mock('@/shared/components/ConfirmDialog', () => ({
 }));
 
 describe('Staging', () => {
+  beforeAll(() => {
+    // Revealing a selected stashed bin scrolls it into view, which jsdom lacks.
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
   beforeEach(() => {
     resetAllStores();
     vi.clearAllMocks();
@@ -72,6 +79,40 @@ describe('Staging', () => {
     });
     return fullBins;
   }
+
+  describe('revealing a stashed bin', () => {
+    const toggleOf = (container: HTMLElement) => (): Element | null =>
+      container.querySelector('[aria-expanded]');
+
+    it('opens a collapsed stash each time one of its bins is revealed', () => {
+      useSettingsStore.getState().updateSetting('lastStashCollapsed', true);
+      const [spare] = addStagedBins([{ label: 'Spare' }]);
+      const { container } = render(<Staging />);
+      const toggle = toggleOf(container);
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('false');
+
+      act(() => revealBin(spare.id));
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
+
+      act(() => {
+        if (toggle()) fireEvent.click(toggle() as Element);
+      });
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('false');
+
+      act(() => revealBin(spare.id));
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('true');
+    });
+
+    it('stays closed for a bin on the grid, or a selection alone', () => {
+      useSettingsStore.getState().updateSetting('lastStashCollapsed', true);
+      const [spare] = addStagedBins([{ label: 'Spare' }]);
+      const { container } = render(<Staging />);
+
+      act(() => revealBin(binId('on-grid')));
+      act(() => useSelectionStore.getState().setSelectedBins([spare.id]));
+      expect(toggleOf(container)()?.getAttribute('aria-expanded')).toBe('false');
+    });
+  });
 
   describe('rendering', () => {
     it('shows empty hint when no staged bins and not dragging', () => {

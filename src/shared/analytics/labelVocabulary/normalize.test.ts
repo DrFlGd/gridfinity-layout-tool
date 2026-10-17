@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   processLabel,
+  conceptsNamedIn,
   getCanonicalTerms,
   isKnownTerm,
   getTermDomain,
@@ -247,6 +248,40 @@ describe('labelVocabulary', () => {
       // Cache should still work after eviction
       const result = processLabel('screwdriver');
       expect(result.normalized).toBe('screwdriver');
+    });
+  });
+
+  describe('conceptsNamedIn', () => {
+    it('names a concept only by a whole alias', () => {
+      expect(conceptsNamedIn('M3x8 screws')).toEqual([processLabel('screws').normalized]);
+      expect(conceptsNamedIn('Snail shells')).not.toContain(processLabel('nail').normalized);
+      expect(conceptsNamedIn('M8screws')).toEqual([]);
+    });
+
+    it('finds a multiword alias inside a longer text, past punctuation', () => {
+      expect(conceptsNamedIn('Big socket wrench, metric')).toContain(
+        processLabel('socket wrench').normalized
+      );
+    });
+
+    it('splits words joined by punctuation, and keeps punctuated aliases whole', () => {
+      const screws = processLabel('screws').normalized;
+      expect(conceptsNamedIn('screws,nuts')).toContain(screws);
+      expect(conceptsNamedIn('screws/bolts')).toContain(screws);
+      expect(conceptsNamedIn('USB-C cables')).toContain(processLabel('usb-c').normalized);
+      expect(conceptsNamedIn('M3-screws')).toContain(screws);
+    });
+
+    it('gives a shared alias the same term processLabel does', () => {
+      expect(conceptsNamedIn('ring')).toEqual([processLabel('ring').normalized]);
+    });
+
+    it('folds accents on both sides, in any Unicode form', () => {
+      const nuts = processLabel('écrous').normalized;
+      expect(nuts).not.toBeNull();
+      expect(conceptsNamedIn('ecrous')).toContain(nuts);
+      expect(conceptsNamedIn('e\u0301crous')).toContain(nuts);
+      expect(conceptsNamedIn('Écrous M3')).toContain(nuts);
     });
   });
 });
