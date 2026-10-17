@@ -16,8 +16,10 @@ import { useSelectionStore } from '@/core/store/selection';
 import { useMobileStore } from '@/core/store/mobile';
 import { useMutations } from '@/shared/contexts';
 import { calcBedCapacityForBin, CONSTRAINTS, STAGING_ID } from '@/core/constants';
-import { getLayerZStartResult } from '@/shared/utils/collision';
-import { isOk, isErr, getUserMessage } from '@/core/result';
+import { maxClearanceHeight } from '@/shared/utils/restingStack';
+import { maxPlaceableHeight } from '@/shared/utils/validationPlacement';
+import { useRestingStack } from '@/shared/hooks/useRestingStack';
+import { isErr, getUserMessage } from '@/core/result';
 import { canPlaceBin, validateCustomProperties } from '@/shared/utils/validation';
 import { clamp } from '@/shared/utils/math';
 import { isBinLocked, validateBinRotation } from '@/shared/utils/binLocation';
@@ -29,6 +31,7 @@ import {
   categoryId as toCategoryId,
   roundHeightUnits,
   effectiveGridUnitMmY,
+  HEIGHT_UNIT_STEP,
 } from '@/core/types';
 import { useTranslation } from '@/i18n';
 import {
@@ -45,7 +48,6 @@ export type {
   BinField,
   ConfirmDeleteState,
   MaxHeightReason,
-  MinHeightReason,
   UseBinInspectorReturn,
 } from './binInspectorTypes';
 
@@ -79,6 +81,7 @@ export function useBinInspector(): UseBinInspectorReturn {
   const layer = bin ? (layout.layers.find((l) => l.id === bin.layerId) ?? null) : null;
 
   const gridUnitMmY = effectiveGridUnitMmY(layout);
+  const restingStack = useRestingStack(layout.bins, layout.layers);
   const constraints = useMemo<BinConstraints>(() => {
     if (!bin) {
       return {
@@ -88,7 +91,6 @@ export function useBinInspector(): UseBinInspectorReturn {
         maxGridUnits: { width: 5, depth: 5 },
         needsSplit: false,
         heightRange: `${CONSTRAINTS.MIN_BIN_HEIGHT}u`,
-        minHeightReason: 'global_minimum',
         maxHeightReason: 'drawer_height',
       };
     }
@@ -116,16 +118,34 @@ export function useBinInspector(): UseBinInspectorReturn {
         maxGridUnits: maxGrid,
         needsSplit,
         heightRange: `${minHeight}u – ${maxHeight}u`,
-        minHeightReason: 'global_minimum',
         maxHeightReason: 'drawer_height',
       };
     }
 
-    const minHeight = Math.max(CONSTRAINTS.MIN_BIN_HEIGHT, layer.height);
-    const zStartResult = getLayerZStartResult(bin.layerId, layout.layers);
-    const maxHeight =
-      layout.drawer.height - (isOk(zStartResult) ? zStartResult.value : layout.drawer.height);
-    const maxClearance = maxHeight - bin.height;
+    const minHeight = CONSTRAINTS.MIN_BIN_HEIGHT;
+    // The height field keeps height plus clearance fixed, so clearance gives way.
+    const stackLimit = maxPlaceableHeight(bin, layout, {
+      clearanceGivesWay: true,
+      stack: restingStack,
+    });
+    // Floored to the input's precision: the height field rounds what it
+    // writes, and rounding up past the limit would be refused. Never below
+    // the bin's own height, so a bin in a stack that is already over the
+    // drawer can come down a step at a time.
+    const steps = Math.round(1 / HEIGHT_UNIT_STEP);
+    const maxHeight = Math.max(
+      minHeight,
+      bin.height,
+      Math.floor(stackLimit * steps + 1e-6) / steps
+    );
+    const maxClearance = maxClearanceHeight(
+      bin,
+      layout.bins,
+      layout.layers,
+      layout.drawer.height,
+      restingStack
+    );
+    const limitedByStack = stackLimit < layout.drawer.height - 1e-9;
 
     return {
       minHeight,
@@ -134,20 +154,9 @@ export function useBinInspector(): UseBinInspectorReturn {
       maxGridUnits: maxGrid,
       needsSplit,
       heightRange: `${minHeight}u – ${maxHeight}u`,
-      minHeightReason:
-        layer.height > CONSTRAINTS.MIN_BIN_HEIGHT ? 'layer_height' : 'global_minimum',
-      maxHeightReason: 'remaining_space',
+      maxHeightReason: limitedByStack ? 'remaining_space' : 'drawer_height',
     };
-  }, [
-    bin,
-    layer,
-    layout.drawer.height,
-    layout.layers,
-    layout.printBedSize,
-    layout.printBedDepth,
-    layout.gridUnitMm,
-    gridUnitMmY,
-  ]);
+  }, [bin, layer, layout, restingStack, gridUnitMmY]);
 
   // Collect all unique custom property keys from all bins in the layout (for suggestions)
   const existingPropertyKeys = useMemo(() => {

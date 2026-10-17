@@ -8,7 +8,8 @@ import { useGridCoords, useGridTemplate } from '@/features/grid-editor/hooks';
 import { toPixels } from '@/features/grid-editor/utils/fractionalPixels';
 import { Bin } from '../Bin';
 import { BrushHoverGhost } from '../BrushHoverGhost';
-import { getBlockedZones } from '@/shared/utils/collision';
+import { getBlockedZones } from '@/shared/utils/restingStack';
+import { useRestingStack } from '@/shared/hooks/useRestingStack';
 import { getLayerBins } from '@/shared/utils/bins';
 import { useFeatureFlag } from '@/shared/hooks/useFeatureFlag';
 import { DEFAULT_CATEGORY_COLOR } from '@/core/constants';
@@ -99,10 +100,10 @@ export function GridCanvas({
     return bins.filter((b) => layersBelowIds.includes(b.layerId));
   }, [bins, layers, activeLayerId, showOtherLayers]);
 
-  // Memoized: Get blocked zones for current layer
+  const restingStack = useRestingStack(bins, layers);
   const blockedZones = useMemo(
-    () => getBlockedZones(activeLayerId, bins, layers),
-    [activeLayerId, bins, layers]
+    () => getBlockedZones(activeLayerId, bins, layers, restingStack),
+    [activeLayerId, bins, layers, restingStack]
   );
 
   // Performance: Create O(1) lookup maps to avoid O(n²) .find() calls in render loops
@@ -343,7 +344,6 @@ export function GridCanvas({
             key={bin.id}
             bin={bin}
             category={categoryMap.get(bin.category)}
-            layer={layerMap.get(bin.layerId)}
             drawer={drawer}
             cellSize={cellSize}
             gap={gap}
@@ -354,7 +354,7 @@ export function GridCanvas({
           />
         ))}
 
-        {/* Blocked zones - bins from lower layers extending into this layer */}
+        {/* Clearance that lower-layer bins reserve above themselves */}
         {blockedZones.map((zone) => {
           const sourceBin = binMap.get(zone.sourceBinId);
           const category = sourceBin ? categoryMap.get(sourceBin.category) : undefined;
@@ -392,7 +392,7 @@ export function GridCanvas({
 
           return (
             <div
-              key={zone.sourceBinId}
+              key={`${zone.sourceBinId}:${String(zone.x)}:${String(zone.y)}`}
               className="blocked-zone relative cursor-pointer transition-all duration-150 hover:opacity-50 hover:ring-2 hover:ring-white/60"
               style={{
                 gridColumn: `${gridCol} / span ${gridColSpan}`,
@@ -410,6 +410,9 @@ export function GridCanvas({
                 opacity: 0.3,
                 zIndex: 8,
               }}
+              // A press that reached the grid would start a draw, whose pointer
+              // capture on document.body steals the click from this zone.
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={() => sourceBin && handleBlockedZoneClick(sourceBin.id, sourceBin.layerId)}
               onKeyDown={(e) => {
                 if ((e.key === 'Enter' || e.key === ' ') && sourceBin) {
@@ -462,7 +465,6 @@ export function GridCanvas({
             key={bin.id}
             bin={bin}
             category={categoryMap.get(bin.category)}
-            layer={layerMap.get(bin.layerId)}
             drawer={drawer}
             cellSize={cellSize}
             gap={gap}

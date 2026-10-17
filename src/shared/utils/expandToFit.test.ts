@@ -359,3 +359,57 @@ describe('resolveExpandToFit — invariants', () => {
     }
   });
 });
+
+describe('resolveExpandToFit and the resting stack', () => {
+  const UPPER = layerId('layer-2');
+  // Expanding three 2-unit columns across 7 units moves the third to x = 5,
+  // under a bin on the layer above that sat on the plate at x = 6.
+  const run = (third: Partial<Bin>, upperHeight: number) => {
+    const bins = [bin(0, 0, 2, 12), bin(2, 0, 2, 12), bin(4, 0, 2, 12, third)];
+    const upper = bin(6, 0, 1, 1, { layerId: UPPER, height: heightUnits(upperHeight) });
+    const l = layout(7, 12, {
+      bins: [...bins, upper],
+      layers: [
+        { id: LAYER, name: 'L1', height: heightUnits(3) },
+        { id: UPPER, name: 'L2', height: heightUnits(3) },
+      ],
+    });
+    return resolveExpandToFit(
+      l.bins,
+      bins.map((b) => b.id),
+      l,
+      undefined
+    );
+  };
+
+  it('refuses a shift that lifts a stacked bin past the drawer top', () => {
+    // 3u + 4u passes the 6u drawer.
+    expect(run({}, 4)).toEqual({ ok: false, reason: 'lifts-stack' });
+    expect(run({}, 3).ok).toBe(true);
+  });
+
+  it('still expands a bin in a stack that is already over the drawer', () => {
+    // A 5u bin under a 4u one is 9u in an 8u drawer. Expanding the upper bin
+    // keeps its socket where it is, so the overflow does not change.
+    const lower = bin(0, 0, 2, 1, { height: heightUnits(5) });
+    const upper = bin(0.5, 0, 1, 1, { layerId: UPPER, height: heightUnits(4) });
+    const l = layout(2, 1, {
+      bins: [lower, upper],
+      drawer: { width: gridUnits(2), depth: gridUnits(1), height: heightUnits(8) },
+      layers: [
+        { id: LAYER, name: 'L1', height: heightUnits(3) },
+        { id: UPPER, name: 'L2', height: heightUnits(3) },
+      ],
+    });
+    const result = resolveExpandToFit(l.bins, [upper.id], l, undefined);
+    expect(result.ok).toBe(true);
+  });
+
+  it('refuses a shift that sets a stacked bin down on reserved clearance', () => {
+    // It would land on the third bin's 2u of clearance, still inside the drawer.
+    expect(run({ clearanceHeight: heightUnits(2) }, 1)).toEqual({
+      ok: false,
+      reason: 'rests-on-clearance',
+    });
+  });
+});

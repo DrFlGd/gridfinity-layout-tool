@@ -122,17 +122,10 @@ function binRise(
  *
  * Columns are resolved by footprint overlap rather than by grid cell: a bin
  * rests on whatever is directly beneath it, which is the tallest already-placed
- * bin its footprint touches. Walking layers bottom-to-top means every supporter
- * is measured before anything that lands on it.
- *
- * Deliberately NOT the layer's z-start. Layers are a planning abstraction; a
- * printed bin is loose in a drawer and falls until something stops it. So a bin
- * on layer 3 with nothing under it on layer 2 rests on the layer-1 bin it
- * overlaps, which is lower than its layer implies — the physical answer, and
- * the one a lid cares about. The two only diverge downward: a bin is never
- * shorter than its own layer (`useBinInspector` floors it there), and a bin
- * taller than its layer blocks the cells above it, so nothing can be stranded
- * in mid-air above one.
+ * bin its footprint touches, or on the clearance that bin reserves for its
+ * contents. Walking layers bottom-to-top means every supporter is measured
+ * before anything that lands on it. This is the editor's own rule
+ * (`resolveRestingStack`), measured in millimetres with the lip and the plate.
  */
 export function drawerCeilingFit(input: DrawerCeilingInput): DrawerCeilingFit | null {
   const { bins, layers, heightUnitMm, plate, ceilingMm, linkedRise } = input;
@@ -152,7 +145,7 @@ export function drawerCeilingFit(input: DrawerCeilingInput): DrawerCeilingFit | 
     .sort((a, b) => (layerOrder.get(a.layerId) ?? 0) - (layerOrder.get(b.layerId) ?? 0));
 
   const measured: DrawerCeilingBin[] = [];
-  const supports: { bin: Bin; topMm: number; hasLip: boolean }[] = [];
+  const supports: { bin: Bin; restMm: number; nests: boolean }[] = [];
 
   for (const bin of placed) {
     const linked = linkedRise?.(bin);
@@ -160,15 +153,14 @@ export function drawerCeilingFit(input: DrawerCeilingInput): DrawerCeilingFit | 
 
     // The junction credit needs both halves: the upper bin's socket to sink,
     // and the SUPPORTER's lip to sink into. A bin resting on a lipless design
-    // sits on its flat top and nests nothing.
-    let supportTopMm: number | undefined;
-    let supportHasLip = true;
+    // sits on its flat top and nests nothing, and one resting on reserved
+    // clearance sits on the contents, nowhere near the lip. So each supporter
+    // gives a base of its top less the nesting it allows, and the highest wins.
+    let baseMm: number | undefined;
     for (const under of supports) {
       if (!footprintsOverlap(bin, under.bin)) continue;
-      if (supportTopMm === undefined || under.topMm > supportTopMm) {
-        supportTopMm = under.topMm;
-        supportHasLip = under.hasLip;
-      }
+      const base = under.restMm - (under.nests ? nestMm : 0);
+      if (baseMm === undefined || base > baseMm) baseMm = base;
     }
 
     // A socketless design has no foot to drop into the plate's pockets, so it
@@ -177,14 +169,21 @@ export function drawerCeilingFit(input: DrawerCeilingInput): DrawerCeilingFit | 
     // the designer measures a bare bin with an OPTIONAL plate; here the model
     // always has one (socketed columns are credited its pockets on the same
     // assumption), so the two rules agree on the premise and differ on the face.
-    const topMm =
-      supportTopMm === undefined
-        ? (linked?.socketless === true ? baseplateTotalHeight(plate) : plateRiseMm) + riseMm
-        : supportTopMm - (supportHasLip ? nestMm : 0) + riseMm;
+    const floorMm =
+      baseMm ?? (linked?.socketless === true ? baseplateTotalHeight(plate) : plateRiseMm);
+    const topMm = floorMm + riseMm;
 
+    // Clearance counts from the bin's nominal top, so a linked design that
+    // already stands taller covers it, as `resolveRestingStack` takes the
+    // larger of the two.
     const clearanceMm = (bin.clearanceHeight ?? 0) * heightUnitMm;
-    const contentsTopMm = topMm + clearanceMm;
-    supports.push({ bin, topMm, hasLip });
+    const nominalTopMm = floorMm + bin.height * heightUnitMm + (hasLip ? LIP_PROTRUSION_MM : 0);
+    const contentsTopMm = clearanceMm > 0 ? Math.max(topMm, nominalTopMm + clearanceMm) : topMm;
+    supports.push({
+      bin,
+      restMm: contentsTopMm,
+      nests: hasLip && contentsTopMm <= topMm + CEILING_EPSILON_MM,
+    });
     measured.push({
       binId: bin.id,
       topMm,

@@ -7,6 +7,7 @@ import { useToastStore } from '@/core/store/toast';
 import { emitSyncEvent } from '@/shared/events/syncEventBus';
 import { resetAllStores } from '@/test/testUtils';
 import { connectSelectionPruning, eventBus } from '@/core/cqrs';
+import { registerLinkedExcessResolver } from '@/shared/utils/collision';
 import type { Bin } from '@/core/types';
 import {
   binId,
@@ -115,7 +116,6 @@ describe('useBinInspector', () => {
         maxGridUnits: { width: 5, depth: 5 },
         needsSplit: false,
         heightRange: '2u',
-        minHeightReason: 'global_minimum',
         maxHeightReason: 'drawer_height',
       });
     });
@@ -130,8 +130,100 @@ describe('useBinInspector', () => {
 
       const { result } = renderHook(() => useBinInspector());
 
-      expect(result.current.constraints.minHeight).toBe(3); // Layer height
-      expect(result.current.constraints.maxHeight).toBe(12); // Drawer height
+      // The layer's 3u is only the default for new bins, not a floor.
+      expect(result.current.constraints.minHeight).toBe(2);
+      expect(result.current.constraints.maxHeight).toBe(12);
+      expect(result.current.constraints.maxHeightReason).toBe('drawer_height');
+    });
+
+    it('floors a fractional stack limit to what the height field can write', () => {
+      registerLinkedExcessResolver((b) => (b.linkedDesignId === undefined ? 0 : 4 / 7));
+      const layout = useLayoutStore.getState().layout;
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        { ...createBin('lidded', 'layer1'), linkedDesignId: toDesignId('lid') },
+        createBin('upper', 'layer2'),
+      ];
+      layout.drawer.height = heightUnits(12);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('upper')] });
+
+      const { result } = renderHook(() => useBinInspector());
+
+      // Rests at 3 + 4/7u, so 8.42857…u of room; 8.4286 would be refused.
+      expect(result.current.constraints.maxHeight).toBe(8.4285);
+      registerLinkedExcessResolver(null);
+    });
+
+    it('keeps an over-full bin reducible one step at a time', () => {
+      // 8u + 8u is already over a 12u drawer; the stack leaves the lower bin 4u.
+      const layout = useLayoutStore.getState().layout;
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        { ...createBin('low', 'layer1'), height: heightUnits(8) },
+        { ...createBin('high', 'layer2'), height: heightUnits(8) },
+      ];
+      layout.drawer.height = heightUnits(12);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('low')] });
+
+      const { result } = renderHook(() => useBinInspector());
+
+      expect(result.current.constraints.maxHeight).toBe(8);
+    });
+
+    it('caps the height below a clearance conflict higher in the stack', () => {
+      const layout = useLayoutStore.getState().layout;
+      const l3 = toLayerId('layer3');
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+        { id: l3, name: 'Layer 3', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        { ...createBin('bottom', 'layer1', 0, 0, 1, 1), height: heightUnits(2) },
+        {
+          ...createBin('tools', 'layer2', 0, 0, 1, 1),
+          height: heightUnits(2),
+          clearanceHeight: heightUnits(1),
+        },
+        { ...createBin('solid', 'layer2', 1, 0, 1, 1), height: heightUnits(6) },
+        { ...createBin('bridge', 'layer3', 0, 0, 2, 1), height: heightUnits(2) },
+      ];
+      layout.drawer.height = heightUnits(10);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('bottom')] });
+
+      const { result } = renderHook(() => useBinInspector());
+
+      expect(result.current.constraints.maxHeight).toBe(3);
+    });
+
+    it('limits max height and clearance by the bin resting on it', () => {
+      const layout = useLayoutStore.getState().layout;
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        createBin('bin1', 'layer1'),
+        { ...createBin('bin2', 'layer2'), height: heightUnits(4) },
+      ];
+      layout.drawer.height = heightUnits(12);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('bin1')] });
+
+      const { result } = renderHook(() => useBinInspector());
+
+      expect(result.current.constraints.maxHeight).toBe(8);
+      expect(result.current.constraints.maxHeightReason).toBe('remaining_space');
+      expect(result.current.constraints.maxClearance).toBe(0);
     });
 
     it('detects when bin needs split', () => {
@@ -442,6 +534,68 @@ describe('useBinInspector', () => {
       const bins = useLayoutStore.getState().layout.bins;
       expect(bins[0].height).toBe(5);
       expect(bins[1].height).toBe(6);
+    });
+
+    it('steps an over-full bin down one unit instead of jumping to the stack limit', () => {
+      const layout = useLayoutStore.getState().layout;
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        { ...createBin('low', 'layer1'), height: heightUnits(8) },
+        { ...createBin('high', 'layer2'), height: heightUnits(8) },
+        { ...createBin('other', 'layer1', 4, 0), height: heightUnits(3) },
+      ];
+      layout.drawer.height = heightUnits(12);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('low'), binId('other')] });
+
+      const { result } = renderHook(() => useBinInspector());
+      const lowHeight = () =>
+        useLayoutStore.getState().layout.bins.find((b) => b.id === binId('low'))?.height;
+
+      act(() => {
+        result.current.updateMultiHeight(1);
+      });
+      expect(lowHeight()).toBe(8);
+
+      act(() => {
+        result.current.updateMultiHeight(-1);
+      });
+      expect(lowHeight()).toBe(7);
+    });
+
+    it('clamps a step below a clearance conflict higher in the stack', () => {
+      const layout = useLayoutStore.getState().layout;
+      layout.layers = [
+        { id: toLayerId('layer1'), name: 'Layer 1', height: heightUnits(3) },
+        { id: toLayerId('layer2'), name: 'Layer 2', height: heightUnits(3) },
+        { id: toLayerId('layer3'), name: 'Layer 3', height: heightUnits(3) },
+      ];
+      layout.bins = [
+        { ...createBin('bottom', 'layer1', 0, 0, 1, 1), height: heightUnits(2) },
+        { ...createBin('other', 'layer1', 3, 0, 1, 1), height: heightUnits(2) },
+        {
+          ...createBin('tools', 'layer2', 0, 0, 1, 1),
+          height: heightUnits(2),
+          clearanceHeight: heightUnits(1),
+        },
+        { ...createBin('solid', 'layer2', 1, 0, 1, 1), height: heightUnits(6) },
+        { ...createBin('bridge', 'layer3', 0, 0, 2, 1), height: heightUnits(2) },
+      ];
+      layout.drawer.height = heightUnits(10);
+      useLayoutStore.setState({ layout });
+      useSelectionStore.setState({ selectedBinIds: [binId('bottom'), binId('other')] });
+
+      const { result } = renderHook(() => useBinInspector());
+      act(() => {
+        result.current.updateMultiHeight(3);
+      });
+
+      const heights = new Map(useLayoutStore.getState().layout.bins.map((b) => [b.id, b.height]));
+      expect(heights.get(binId('bottom'))).toBe(3);
+      expect(heights.get(binId('other'))).toBe(5);
     });
 
     it('clamps height to constraints', () => {

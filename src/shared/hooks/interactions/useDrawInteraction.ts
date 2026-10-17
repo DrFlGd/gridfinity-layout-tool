@@ -8,9 +8,9 @@ import {
 import { useBinExampleGalleryStore } from '@/core/store/binExampleGallery';
 import { useGapFitStore } from '@/core/store/gapFit';
 import { canPlaceBin, getPlacementErrorMessage } from '@/shared/utils/validation';
-import { getLayerZStartResult } from '@/shared/utils/collision';
-import { snapToGrid } from '@/core/constants';
-import { effectiveGridUnitMmY } from '@/core/types';
+import { maxPlaceableHeight } from '@/shared/utils/validationPlacement';
+import { CONSTRAINTS, snapToGrid } from '@/core/constants';
+import { binId, effectiveGridUnitMmY, heightUnits } from '@/core/types';
 import { snapDrawRect } from '@/shared/utils/snap';
 import { capturePointer } from './interaction';
 import { isOk } from '@/core/result';
@@ -18,15 +18,7 @@ import { useTranslation } from '@/i18n';
 import { mlTracking } from '@/shared/analytics/useMLTracking';
 import { trackBinCreated, trackPaintMode } from '@/shared/analytics/posthog';
 import type { InteractionContext, ModeHandlers, DrawStartArgs } from './types';
-import type {
-  BinId,
-  Coord,
-  FitsGapSource,
-  GridUnits,
-  HeightUnits,
-  Bin,
-  ValidationResult,
-} from '@/core/types';
+import type { BinId, Coord, FitsGapSource, GridUnits, Bin, ValidationResult } from '@/core/types';
 
 /**
  * Hook for draw mode interactions: creating new bins by dragging a rectangle.
@@ -159,37 +151,48 @@ export function useDrawInteraction(context: InteractionContext): ModeHandlers<Dr
           }
           // Gap selection: hand the drawn empty region to the community
           // gallery instead of creating a bin. Clamp to the empty area first
-          // so dragging across a bin still yields a usable gap.
+          // so dragging across a bin still yields a usable gap. Snapped at the
+          // shortest bin, since the gallery picks a height to fit the gap.
           const snapped = snapDrawRect(
             x1,
             y1,
             width,
             depth,
-            layer.height,
+            heightUnits(CONSTRAINTS.MIN_BIN_HEIGHT),
             activeLayerId,
             layout,
             minSizeNow
           );
-          const zStartResult = getLayerZStartResult(activeLayerId, layout.layers);
-          if (!isOk(zStartResult)) return;
-          const maxHeight = (layout.drawer.height - zStartResult.value) as HeightUnits;
-          // Probe with the full remaining stack budget: confirms the clamped
-          // footprint itself is placeable (blocked zones included) before the
-          // gallery ever opens.
-          const probe: ValidationResult =
-            maxHeight > 0
-              ? canPlaceBin(
-                  {
-                    x: x1 as GridUnits,
-                    y: y1 as GridUnits,
-                    width: snapped.width as GridUnits,
-                    depth: snapped.depth as GridUnits,
-                    height: maxHeight,
-                  },
-                  activeLayerId,
-                  layout
-                )
-              : { valid: false, reason: 'exceeds_height' };
+          const gap = {
+            x: x1 as GridUnits,
+            y: y1 as GridUnits,
+            width: snapped.width as GridUnits,
+            depth: snapped.depth as GridUnits,
+          };
+          // The gallery sizes the bin to fit, so the gap only needs the
+          // tallest height that still places there, clearance included.
+          const maxHeight = heightUnits(
+            maxPlaceableHeight(
+              {
+                ...gap,
+                id: binId('__gap__'),
+                layerId: activeLayerId,
+                height: heightUnits(CONSTRAINTS.MIN_BIN_HEIGHT),
+                category: activeCategoryId,
+                label: '',
+                notes: '',
+              },
+              layout
+            )
+          );
+          const probe: ValidationResult = canPlaceBin(
+            {
+              ...gap,
+              height: heightUnits(Math.max(maxHeight, CONSTRAINTS.MIN_BIN_HEIGHT)),
+            },
+            activeLayerId,
+            layout
+          );
           if (!probe.valid) {
             addToast(getPlacementErrorMessage(t, probe.reason, probe.blockingInfo), 'error');
             return;

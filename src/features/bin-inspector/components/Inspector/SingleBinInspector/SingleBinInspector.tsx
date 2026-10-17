@@ -5,6 +5,8 @@ import { Button, IconButton, Select, Stepper, XIcon } from '@/design-system';
 import { ArrowLeftRightIcon, LockIcon, LockOpenIcon, RulerIcon } from '@/design-system/Icon';
 import { useHalfGridModeStore } from '@/core/store/halfGridMode';
 import { getBinLocationContext, isBinLocked } from '@/shared/utils/binLocation';
+import { getUnevenlySupported } from '@/shared/utils/restingStack';
+import { useRestingStack } from '@/shared/hooks/useRestingStack';
 import {
   formatHeightUnits,
   isStandardStackHeight,
@@ -69,6 +71,7 @@ export function SingleBinInspector({ inspector, variant, onClose }: SingleBinIns
 
   const halfGridMode = useHalfGridModeStore((state) => state.halfGridMode);
   const ceiling = useDrawerCeiling();
+  const restingStack = useRestingStack(layout.bins, layout.layers);
   const t = useTranslation();
 
   if (!bin) return null;
@@ -76,6 +79,9 @@ export function SingleBinInspector({ inspector, variant, onClose }: SingleBinIns
   // Only the bins actually standing proud are listed, so a miss is a fit.
   const ceilingOverflowMm =
     ceiling?.overflowing.find((entry) => entry.binId === bin.id)?.overflowMm ?? null;
+
+  const restingZ = restingStack.bins.get(bin.id)?.zStart ?? 0;
+  const unevenlySupported = getUnevenlySupported(layout.bins, restingStack).has(bin.id);
 
   const isMobile = variant === 'mobile';
   const locationContext = getBinLocationContext(bin);
@@ -96,13 +102,9 @@ export function SingleBinInspector({ inspector, variant, onClose }: SingleBinIns
 
   // Height meta: unit equivalent + mm limits, shown as one consolidated line.
   const heightEquiv = t('inspector.heightUnitsEquiv', { units: formatHeightUnits(bin.height) });
-  const minHeightHint =
-    constraints.minHeightReason === 'layer_height'
-      ? t('inspector.minHeightHint', {
-          min: heightMmAt(constraints.minHeight),
-          reason: t('inspector.heightReasonLayerHeight'),
-        })
-      : t('inspector.minHeightHintNoReason', { min: heightMmAt(constraints.minHeight) });
+  const minHeightHint = t('inspector.minHeightHintNoReason', {
+    min: heightMmAt(constraints.minHeight),
+  });
   const maxHeightHint = t('inspector.maxHeightHint', {
     max: heightMmAt(constraints.maxHeight),
     reason:
@@ -317,6 +319,12 @@ export function SingleBinInspector({ inspector, variant, onClose }: SingleBinIns
             </div>
             {!isStandardStackHeight(bin.height, layout.heightUnitMm) && (
               <div className="text-warning">{t('inspector.nonStandardStackWarning')}</div>
+            )}
+            {restingZ > 0 && (
+              <div>{t('inspector.restsAt', { height: formatHeightUnits(restingZ) })}</div>
+            )}
+            {unevenlySupported && (
+              <div className="text-warning">{t('inspector.unevenSupport')}</div>
             )}
             {ceilingOverflowMm !== null && (
               <div className="text-warning">

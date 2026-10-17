@@ -4,8 +4,7 @@ import type { LayerViewMode } from '@/core/store/view';
 import type { BinRenderData } from '@/shared/hooks/useExplodedLayerView';
 import type { BinDividersSpec } from '@/shared/hooks/useBinGeometry';
 import { STAGING_ID, DEFAULT_CATEGORY_COLOR } from '@/core/constants';
-import { getLayerZStartResult } from '@/shared/utils/collision';
-import { isOk } from '@/core/result';
+import { useRestingStack } from '@/shared/hooks/useRestingStack';
 
 interface UseBinsToRenderOptions {
   bins: Bin[];
@@ -34,6 +33,7 @@ export function useBinsToRender({
   // Performance: Create O(1) lookup maps to avoid O(n^2) .findIndex()/.find() calls in render loop
   const layerIndexMap = useMemo(() => new Map(layers.map((l, idx) => [l.id, idx])), [layers]);
   const categoryMap = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+  const stack = useRestingStack(bins, layers);
 
   return useMemo(() => {
     const result: BinRenderData[] = [];
@@ -60,9 +60,9 @@ export function useBinsToRender({
         }
       }
 
-      const zStartResult = getLayerZStartResult(bin.layerId, layers);
-      if (!isOk(zStartResult)) continue;
-      const zStart = zStartResult.value * heightToGridScale;
+      const rest = stack.bins.get(bin.id);
+      if (!rest) continue;
+      const zStart = rest.zStart * heightToGridScale;
       const category = categoryMap.get(bin.category);
       const color = category?.color || DEFAULT_CATEGORY_COLOR;
 
@@ -85,12 +85,11 @@ export function useBinsToRender({
     // Distance from camera increases as X decreases and Y increases
     // So depth = (x - y): low value = far, high value = close
     result.sort((a, b) => {
-      // Layer depth (z) is primary
       if (a.z !== b.z) {
         return a.z - b.z;
       }
 
-      // Within same layer, sort by distance from camera
+      // At the same height, sort by distance from camera
       // Camera at (X+, Y-) means close bins have high (x-y), far bins have low (x-y)
       // Sort ascending (x-y) to render far bins first (with low z-offsets)
       const depthA = a.x - a.y;
@@ -108,7 +107,7 @@ export function useBinsToRender({
     return result;
   }, [
     bins,
-    layers,
+    stack,
     categoryMap,
     layerIndexMap,
     activeLayerIndex,
