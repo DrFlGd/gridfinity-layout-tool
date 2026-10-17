@@ -12,6 +12,7 @@
 
 import type { Bin, Layout, ValidationReason } from '@/core/types';
 import { normalizeDrawerOutline } from './drawerOutline';
+import { migrateLayoutFields } from './layoutMigration';
 import { dropOrphanedPairs } from './binPairs';
 import {
   binId as toBinId,
@@ -228,7 +229,7 @@ export function validateImport(data: unknown): ImportValidationResult {
   // old client may have resized the drawer without adapting the shape) and
   // drop it when invalid or rectangle-equivalent. Half-pairs are unpaired for
   // the same reason: a dangling pairId makes every pair expansion a no-op.
-  const typedLayout = data as Layout;
+  const typedLayout = migrateLayoutFields(layout) as Layout;
   return {
     valid: true,
     errors: [],
