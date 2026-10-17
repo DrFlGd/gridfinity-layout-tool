@@ -1,5 +1,7 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, createEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent, createEvent } from '@testing-library/react';
+import { Button } from '../Button';
 import { Menu } from './Menu';
 
 const defaultProps = {
@@ -8,7 +10,85 @@ const defaultProps = {
   position: { x: 100, y: 100 },
 };
 
+function Opener({ onPick }: { onPick: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <Button onClick={() => setOpen(true)}>Options</Button>
+      <input aria-label="Elsewhere" />
+      <Menu.Root open={open} onClose={() => setOpen(false)} position={{ x: 0, y: 0 }}>
+        <Menu.Item onClick={onPick}>Pick</Menu.Item>
+      </Menu.Root>
+    </>
+  );
+}
+
 describe('Menu', () => {
+  describe('focus on open', () => {
+    it('moves focus to the first item as the menu opens, without waiting a frame', () => {
+      render(<Opener onPick={vi.fn()} />);
+      const opener = screen.getByRole('button', { name: 'Options' });
+      opener.focus();
+      fireEvent.click(opener);
+      expect(document.activeElement).toBe(screen.getByRole('menuitem', { name: 'Pick' }));
+    });
+  });
+
+  describe('focus on close', () => {
+    it('returns focus to what opened the menu', () => {
+      render(<Opener onPick={vi.fn()} />);
+      const opener = screen.getByRole('button', { name: 'Options' });
+      opener.focus();
+      fireEvent.click(opener);
+      screen.getByRole('menuitem', { name: 'Pick' }).focus();
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Pick' }));
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it('closes on Tab and returns focus to what opened it', () => {
+      render(<Opener onPick={vi.fn()} />);
+      const opener = screen.getByRole('button', { name: 'Options' });
+      opener.focus();
+      fireEvent.click(opener);
+      fireEvent.keyDown(screen.getByRole('menu'), { key: 'Tab', shiftKey: true });
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(opener);
+    });
+
+    it('closes when focus moves somewhere else, such as a dialog opening', () => {
+      render(<Opener onPick={vi.fn()} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Options' }));
+      screen.getByRole('menuitem', { name: 'Pick' }).focus();
+      act(() => screen.getByLabelText('Elsewhere').focus());
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(document.activeElement).toBe(screen.getByLabelText('Elsewhere'));
+    });
+
+    it('stays open while focus moves between its items', () => {
+      const onClose = vi.fn();
+      render(
+        <Menu.Root open onClose={onClose} position={{ x: 0, y: 0 }}>
+          <Menu.Item onClick={vi.fn()}>Edit</Menu.Item>
+          <Menu.Item onClick={vi.fn()}>Delete</Menu.Item>
+        </Menu.Root>
+      );
+      screen.getByRole('menuitem', { name: 'Edit' }).focus();
+      screen.getByRole('menuitem', { name: 'Delete' }).focus();
+      // Safari blurs a clicked item without focusing anything.
+      fireEvent.blur(screen.getByRole('menuitem', { name: 'Delete' }), { relatedTarget: null });
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('leaves focus where an item’s action moved it', () => {
+      render(<Opener onPick={() => screen.getByLabelText('Elsewhere').focus()} />);
+      const opener = screen.getByRole('button', { name: 'Options' });
+      opener.focus();
+      fireEvent.click(opener);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Pick' }));
+      expect(document.activeElement).toBe(screen.getByLabelText('Elsewhere'));
+    });
+  });
+
   describe('rendering', () => {
     it('returns null when closed', () => {
       render(

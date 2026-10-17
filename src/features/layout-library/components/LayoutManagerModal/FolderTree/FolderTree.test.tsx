@@ -134,4 +134,83 @@ describe('FolderTree', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Delete?: Study' }));
     expect(onDelete).toHaveBeenCalledWith('study');
   });
+
+  describe('with places on', () => {
+    it('changes a folder’s kind, offering a place only at the top', () => {
+      const onSetKind = vi.fn();
+      render(
+        <FolderTree
+          library={library}
+          selectedId="desk"
+          onSelect={noop}
+          onCreate={noop}
+          onRename={noop}
+          onDelete={noop}
+          onSetKind={onSetKind}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Open folder Study, Area' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Change kind: Study' }));
+      expect(screen.getByRole('menuitem', { name: /Make it a place/ })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('menuitem', { name: /Make it a storage unit/ }));
+      expect(onSetKind).toHaveBeenCalledWith('study', 'unit');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Change kind: Desk' }));
+      expect(screen.queryByRole('menuitem', { name: /Make it a place/ })).toBeNull();
+      expect(screen.getByRole('menuitem', { name: /Make it a storage unit/ })).toBeInTheDocument();
+    });
+
+    it('returns focus to the kind button after a choice, even when a click did not focus it', () => {
+      render(
+        <FolderTree
+          library={library}
+          selectedId={null}
+          onSelect={noop}
+          onCreate={noop}
+          onRename={noop}
+          onDelete={noop}
+          onSetKind={noop}
+        />
+      );
+      const button = screen.getByRole('button', { name: 'Change kind: Study' });
+      fireEvent.click(button);
+      fireEvent.click(screen.getByRole('menuitem', { name: /Make it a storage unit/ }));
+      expect(document.activeElement).toBe(button);
+    });
+
+    it('creates a place at the top, whatever is selected', () => {
+      const onCreate = vi.fn();
+      render(
+        <FolderTree
+          library={library}
+          selectedId="desk"
+          onSelect={noop}
+          onCreate={onCreate}
+          onRename={noop}
+          onDelete={noop}
+          onSetKind={noop}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'New place' }));
+      const name = screen.getByLabelText('Place name, like Home or Shop');
+      fireEvent.change(name, { target: { value: 'Shop' } });
+      fireEvent.keyDown(name, { key: 'Enter' });
+      expect(onCreate).toHaveBeenCalledWith('Shop', null, 'place');
+    });
+
+    it('shows no kind controls while places is off', () => {
+      render(
+        <FolderTree
+          library={library}
+          selectedId={null}
+          onSelect={noop}
+          onCreate={noop}
+          onRename={noop}
+          onDelete={noop}
+        />
+      );
+      expect(screen.queryByRole('button', { name: /Change kind/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'New place' })).toBeNull();
+    });
+  });
 });

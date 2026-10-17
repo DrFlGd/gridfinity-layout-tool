@@ -8,12 +8,13 @@ import {
   useContext,
   type ReactNode,
   type KeyboardEvent as ReactKeyboardEvent,
+  type FocusEvent as ReactFocusEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '../cn';
-import { focusRing, interactiveTransition } from '../variants';
+import { focusRing } from '../variants';
 
 interface MenuContextValue {
   onClose: () => void;
@@ -29,10 +30,12 @@ function useMenuContext() {
   }
   return context;
 }
-const overlayVariants = cva(['fixed inset-0 z-40', 'bg-overlay-light']);
+// Above modal dialogs (z-50), so a menu opened inside one also catches the
+// click that dismisses it; below the command palette and Labs drawer.
+const overlayVariants = cva(['fixed inset-0 z-[60]', 'bg-overlay-light']);
 
 const contentVariants = cva([
-  'fixed z-50',
+  'fixed z-[61]',
   'min-w-[180px]',
   'bg-surface-elevated',
   'border border-stroke-subtle',
@@ -51,7 +54,9 @@ const itemVariants = cva(
     'text-sm',
     'cursor-pointer',
     'outline-none',
-    interactiveTransition,
+    // Colors only: the menu stays visibility:hidden until placed, and an item
+    // transitioning visibility stays hidden a moment longer, too long to focus.
+    'transition-colors duration-(--motion-fast) ease-(--ease-out-quart)',
   ],
   {
     variants: {
@@ -160,6 +165,7 @@ function MenuRoot({
   // Use ref for focusedIndex - it only tracks position for keyboard nav calculations
   // and doesn't need to trigger re-renders (actual focus is managed imperatively)
   const focusedIndexRef = useRef(-1);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   // Register menu items for keyboard navigation
   const registerItem = useCallback((element: HTMLElement) => {
@@ -169,16 +175,19 @@ function MenuRoot({
     };
   }, []);
 
-  // Focus first item when menu opens, reset when closed
+  // Reset keyboard position when the menu opens; on close, return focus.
   useEffect(() => {
     if (open) {
       focusedIndexRef.current = 0;
-      requestAnimationFrame(() => {
-        itemsRef.current[0]?.focus();
-      });
     } else {
       focusedIndexRef.current = -1;
       itemsRef.current = [];
+      // Closing removes the focused item. Hand focus back to what opened the
+      // menu, unless an item's action already moved it (a dialog it opened).
+      const opener = returnFocusRef.current;
+      returnFocusRef.current = null;
+      const lost = document.activeElement === null || document.activeElement === document.body;
+      if (opener?.isConnected && lost) opener.focus();
     }
   }, [open]);
 
@@ -213,6 +222,18 @@ function MenuRoot({
     menu.style.top = `${y}px`;
     menu.style.visibility = 'visible';
   }, [open, position, align]);
+
+  // Runs after the menu is made visible, which focus needs. Items register from
+  // a callback ref a render later, so the first one is found in the DOM. Focus
+  // moves here, synchronously, rather than in a later frame.
+  useLayoutEffect(() => {
+    if (!open) return;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    menuRef.current
+      ?.querySelector<HTMLElement>('[role="menuitem"]:not([aria-disabled="true"])')
+      ?.focus();
+  }, [open]);
 
   const handleKeyDown = useCallback(
     (e: ReactKeyboardEvent) => {
@@ -249,7 +270,10 @@ function MenuRoot({
           items[lastIndex]?.focus();
           break;
         }
-        case 'Escape': {
+        // The menu is portalled out of any dialog it opened from, so a Tab would
+        // leave that dialog's focus trap; it closes the menu and focus returns.
+        case 'Escape':
+        case 'Tab': {
           e.preventDefault();
           onClose();
           break;
@@ -263,6 +287,18 @@ function MenuRoot({
   const handleOverlayClick = useCallback(() => {
     onClose();
   }, [onClose]);
+
+  // Anything that takes focus away (the command palette, a dialog) closes the
+  // menu, which stacks above dialogs and would otherwise sit over the new one.
+  // A blur to nowhere is ignored: Safari does not focus a clicked button, so
+  // clicking an item blurs the menu before the click lands.
+  const handleBlur = useCallback(
+    (e: ReactFocusEvent<HTMLDivElement>) => {
+      const next = e.relatedTarget;
+      if (next instanceof Node && !e.currentTarget.contains(next)) onClose();
+    },
+    [onClose]
+  );
 
   if (!open) return null;
 
@@ -286,6 +322,7 @@ function MenuRoot({
           visibility: 'hidden',
         }}
         onKeyDown={handleKeyDown}
+        onBlur={handleBlur}
       >
         {children}
       </div>
