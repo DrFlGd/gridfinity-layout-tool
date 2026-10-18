@@ -1,17 +1,20 @@
-import type { Bin, DesignId, DesignSlantFacts, FractionalEdge, Layout, Rect } from '@/core/types';
+import type {
+  Bin,
+  DesignId,
+  DesignSlantFacts,
+  FractionalEdge,
+  Layout,
+  Rect,
+  SlantConfig,
+  SlantSide,
+} from '@/core/types';
 import { effectiveGridUnitMmY, gridUnits } from '@/core/types';
 import { CONSTRAINTS, STAGING_ID } from '@/core/constants';
 import { footprintsOverlap } from './collision';
 import { resolveBinOverhang } from './drawerMargin';
 import { edgeForPosition } from './fractionalEdge';
 import { isTurnedPlacement, sideInPlacement } from './placementTurn';
-import {
-  planSupportFor,
-  slantPlanFor,
-  slantSpanZFor,
-  type SlantPlan,
-  type SlantSupportPlan,
-} from './slantPlan';
+import { planSupportFor, slantPlanFor, slantSpanZFor, type SlantPlan } from './slantPlan';
 
 export interface LinkedSlantFacts extends DesignSlantFacts {
   /** The design's own size, which a turned or not yet resynced placement can differ from. */
@@ -59,31 +62,24 @@ export type SlantLayout = Pick<
 
 export interface PlacedSlant {
   readonly plan: SlantPlan;
+  /** How far the top edge reaches past the footprint, in mm. */
+  readonly topOffsetMm: number;
   /** The cells the end support stands on, past the lean side; null without one. */
   readonly support: Rect | null;
 }
 
-function supportRect(bin: Bin, support: SlantSupportPlan): Rect {
-  const length = support.lengthU;
-  switch (support.slant.side) {
+export function rectPastSide(rect: Rect, side: SlantSide, length: number): Rect {
+  const { x, y, width, depth } = rect;
+  const along = gridUnits(length);
+  switch (side) {
     case 'back':
-      return {
-        x: bin.x,
-        y: gridUnits(bin.y + bin.depth),
-        width: bin.width,
-        depth: gridUnits(length),
-      };
+      return { x, y: gridUnits(y + depth), width, depth: along };
     case 'front':
-      return { x: bin.x, y: gridUnits(bin.y - length), width: bin.width, depth: gridUnits(length) };
+      return { x, y: gridUnits(y - length), width, depth: along };
     case 'right':
-      return {
-        x: gridUnits(bin.x + bin.width),
-        y: bin.y,
-        width: gridUnits(length),
-        depth: bin.depth,
-      };
+      return { x: gridUnits(x + width), y, width: along, depth };
     case 'left':
-      return { x: gridUnits(bin.x - length), y: bin.y, width: gridUnits(length), depth: bin.depth };
+      return { x: gridUnits(x - length), y, width: along, depth };
   }
 }
 
@@ -139,7 +135,6 @@ export function placedSlant(
   const plan = slantPlanFor(bin.slant ?? facts?.config);
   if (!plan) return null;
   if (resolveBinOverhang(bin, layout.drawer, layout.baseplateParams) !== null) return null;
-  if (!plan.endSupport) return { plan, support: null };
 
   // The export builds a linked design at its own height and in its own units,
   // which a placement keeps until the next resync and the layout's can differ from.
@@ -164,6 +159,8 @@ export function placedSlant(
     heightUnitMm: units.heightUnitMm,
     extraWallHeightMm: facts?.extraWallMm,
   });
+  const topOffsetMm = plan.k * Math.max(0, span.topZ - span.pivotZ);
+  if (!plan.endSupport) return { plan, topOffsetMm, support: null };
   const support = planSupportFor(plan, {
     ...span,
     width: bin.width,
@@ -177,7 +174,25 @@ export function placedSlant(
     gridUnitMm: units.gridUnitMm,
     gridUnitMmY: units.gridUnitMmY,
   });
-  return { plan, support: support ? supportRect(bin, support) : null };
+  return {
+    plan,
+    topOffsetMm,
+    support: support ? rectPastSide(bin, plan.side, support.lengthU) : null,
+  };
+}
+
+/** The linked design's own slant, facing the drawer, which a placed slant replaces. */
+export function linkedDesignSlant(bin: Bin): SlantConfig | undefined {
+  const facts = placementFacts(bin);
+  return facts?.blocked ? undefined : facts?.config;
+}
+
+/** What keeps a placed bin upright whatever slant it is given, if anything. */
+export function slantHeldUprightBy(bin: Bin, layout: SlantLayout): 'design' | 'overhang' | null {
+  if (placementFacts(bin)?.blocked) return 'design';
+  return resolveBinOverhang(bin, layout.drawer, layout.baseplateParams) !== null
+    ? 'overhang'
+    : null;
 }
 
 /** The bin's footprint, plus its end support's cells when it has one. */
@@ -210,14 +225,15 @@ export function slantConflicts(
   candidate: Bin,
   own: PlacedSlant | null,
   layout: SlantLayout & Pick<Layout, 'bins'>,
-  skip: (other: Bin) => boolean = () => false
+  skip: (other: Bin) => boolean = () => false,
+  zoneOf: (other: Bin) => ReturnType<typeof slantZone> = (other) => slantZone(other, layout)
 ): SlantConflict[] {
   const conflicts: SlantConflict[] = [];
   const ownSupport = own?.support ? [own.support] : [];
   const ownZone = [candidate, ...ownSupport];
   for (const other of layout.bins) {
     if (other.layerId === STAGING_ID || other.id === candidate.id || skip(other)) continue;
-    const zone = slantZone(other, layout);
+    const zone = zoneOf(other);
     if (other.layerId === candidate.layerId) {
       const theirSupport = zone.rects.slice(1);
       if (
