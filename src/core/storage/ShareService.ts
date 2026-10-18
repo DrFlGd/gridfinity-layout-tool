@@ -438,6 +438,7 @@ export async function restoreSharedDesigns(
     // The planner palette and the linked-bin mesh cache both key off the
     // registry, so a design that skips it stays invisible to the layout.
     const edgeFields = await port.registryEdgeFields(params);
+    const placementFields = await port.registryPlacementFields(params);
     await port.upsertRegistryEntry({
       id: result.value.id,
       name: result.value.name,
@@ -445,6 +446,7 @@ export async function restoreSharedDesigns(
       depth: params.depth,
       height: params.height,
       ...edgeFields,
+      ...placementFields,
       updatedAt: result.value.updatedAt,
     });
   }

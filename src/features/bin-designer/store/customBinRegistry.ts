@@ -7,7 +7,8 @@
  * Registry is updated whenever the Bin Designer saves or deletes a design.
  */
 
-import type { DesignId } from '@/core/types';
+import type { DesignId, DesignSlantFacts } from '@/core/types';
+import { CONSTRAINTS } from '@/core/constants';
 import type { ItemEnvelope, ItemKind } from '@/shared/types/item';
 import type { AssemblyStructure } from '@/shared/types/assembly';
 import { assemblyOverhangMm, assemblyRiseMm } from '@/shared/types/assemblyPlacement';
@@ -21,10 +22,12 @@ import {
   type AssembledHeightSource,
 } from '@/shared/printSettings/assembledHeight';
 import { planKnifeRest } from '@/shared/utils/knifeRestPlan';
+import { migrateSlant, slantBlocker } from '@/shared/utils/slantPlan';
 import { hasOverhang, resolveOverhang } from '@/shared/utils/overhang';
 import { isPartialMask } from '@/shared/utils/cellMask';
 import type { BinParams, SavedDesign } from '../types';
 import { isSocketlessBase } from '../types/base';
+import { migrateParams } from '../constants/paramMigration';
 import { designFootprint } from '../utils/designKind';
 
 const REGISTRY_KEY = 'gridfinity-custom-bins-v1';
@@ -137,6 +140,13 @@ export interface CustomBinRef {
     readonly front: number;
     readonly back: number;
   };
+  /**
+   * What the layout needs to reserve a placed bin's end support, which it
+   * checks synchronously, without the full params. Absent = an upright design
+   * that could take a placed slant and has no extra wall, or an entry saved
+   * before the field.
+   */
+  readonly slant?: DesignSlantFacts;
   /** ISO timestamp of last update */
   readonly updatedAt: string;
 }
@@ -213,6 +223,29 @@ export function registryKnifeRestFields(params: BinParams): Pick<CustomBinRef, '
       gapMm: plan.gapMm,
     },
   };
+}
+
+/**
+ * Project the slant facts out of a full `BinParams`. Spread wherever
+ * {@link registryHeightFields} is; an explicit `slant: undefined` clears a
+ * stale entry, as {@link registryKnifeRestFields} does.
+ */
+export function registrySlantFields(params: BinParams): Pick<CustomBinRef, 'slant'> {
+  const config = migrateSlant(params.slant);
+  const extraWallMm = Math.max(0, params.extraWallHeightMm ?? 0);
+  const facts: DesignSlantFacts = {
+    ...(config ? { config } : {}),
+    ...(slantBlocker(params) !== null ? { blocked: true as const } : {}),
+    ...(extraWallMm > 0 ? { extraWallMm } : {}),
+    ...(params.gridUnitMm !== CONSTRAINTS.GRID_UNIT_MM_DEFAULT
+      ? { gridUnitMm: params.gridUnitMm }
+      : {}),
+    ...(params.gridUnitMmY !== undefined ? { gridUnitMmY: params.gridUnitMmY } : {}),
+    ...(params.heightUnitMm !== CONSTRAINTS.HEIGHT_UNIT_MM_DEFAULT
+      ? { heightUnitMm: params.heightUnitMm }
+      : {}),
+  };
+  return { slant: Object.keys(facts).length > 0 ? facts : undefined };
 }
 
 /**
@@ -329,6 +362,7 @@ function parseEntry(raw: unknown): CustomBinRef | null {
     hasLip,
     knifeRest,
     overhangMm,
+    slant,
   } = raw as Record<string, unknown>;
   if (
     typeof id !== 'string' ||
@@ -406,8 +440,36 @@ function parseEntry(raw: unknown): CustomBinRef | null {
         },
       };
     })(),
+    ...(() => {
+      const facts = parseSlantFacts(slant);
+      return facts ? { slant: facts } : {};
+    })(),
     updatedAt,
   };
+}
+
+function parseSlantFacts(raw: unknown): DesignSlantFacts | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const {
+    config: rawConfig,
+    blocked,
+    extraWallMm,
+    gridUnitMm,
+    gridUnitMmY,
+    heightUnitMm,
+  } = raw as Record<string, unknown>;
+  const config = migrateSlant(rawConfig);
+  const positive = (v: unknown): v is number =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0;
+  const facts: DesignSlantFacts = {
+    ...(config ? { config } : {}),
+    ...(blocked === true ? { blocked: true as const } : {}),
+    ...(positive(extraWallMm) ? { extraWallMm } : {}),
+    ...(positive(gridUnitMm) ? { gridUnitMm } : {}),
+    ...(positive(gridUnitMmY) ? { gridUnitMmY } : {}),
+    ...(positive(heightUnitMm) ? { heightUnitMm } : {}),
+  };
+  return Object.keys(facts).length > 0 ? facts : undefined;
 }
 
 /**
@@ -499,7 +561,40 @@ function withCarriedFields(next: CustomBinRef, prev: CustomBinRef): CustomBinRef
     ...(!('knifeRest' in next) && prev.knifeRest !== undefined
       ? { knifeRest: prev.knifeRest }
       : {}),
+    ...(!('slant' in next) && prev.slant !== undefined ? { slant: prev.slant } : {}),
   };
+}
+
+/**
+ * Refresh one entry's slant facts, and every field that sizes its end
+ * support, from its design's params, for a writer that holds the params but
+ * none of the entry's other fields, such as a sync pull. The support reserves
+ * layout cells, so these cannot wait for the designer to write the entry
+ * again. The params may be stored ones from before a field existed. A design
+ * the registry does not know stays out of it.
+ */
+export function refreshRegistrySlant(id: string, stored: BinParams): Result<void, StorageError> {
+  const refs = loadRegistry();
+  if (!refs.some((r) => r.id === id)) return ok(undefined);
+  const params = migrateParams(stored);
+  const { slant } = registrySlantFields(params);
+  const result = saveRegistry(
+    refs.map((r) => {
+      if (r.id !== id) return r;
+      const { slant: _stale, lowProfileRiseDeltaMm: _staleDelta, ...rest } = r;
+      return {
+        ...rest,
+        width: params.width,
+        depth: params.depth,
+        height: params.height,
+        ...registryEdgeFields(params),
+        ...registryHeightFields(params),
+        ...(slant ? { slant } : {}),
+      };
+    })
+  );
+  notifySubscribers();
+  return result;
 }
 
 /**

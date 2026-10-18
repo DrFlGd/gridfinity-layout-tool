@@ -19,6 +19,7 @@
 import type {
   DesignRegistryEdgeFields,
   DesignRegistryEntry,
+  DesignRegistryPlacementFields,
   DesignStorePort,
   LoadedDesignData,
   SaveDesignInput,
@@ -78,5 +79,14 @@ export const designStoreAdapter: DesignStorePort = {
   async registryEdgeFields(params: unknown): Promise<DesignRegistryEdgeFields> {
     const { registryEdgeFields } = await import('@/features/bin-designer/store/customBinRegistry');
     return registryEdgeFields(params as BinParams);
+  },
+
+  async registryPlacementFields(params: unknown): Promise<DesignRegistryPlacementFields> {
+    const [{ registryHeightFields, registrySlantFields }, { migrateParams }] = await Promise.all([
+      import('@/features/bin-designer/store/customBinRegistry'),
+      import('@/features/bin-designer/constants/paramMigration'),
+    ]);
+    const migrated = migrateParams(params as BinParams);
+    return { ...registryHeightFields(migrated), ...registrySlantFields(migrated) };
   },
 };

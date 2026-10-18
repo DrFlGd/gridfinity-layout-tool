@@ -35,6 +35,7 @@ vi.mock('@/features/bin-designer/hooks/useCommunityPublish', () => ({
 const upsertRegistryEntry = vi.fn();
 const registryEdgeFields = vi.fn((_params: unknown) => ({}));
 const registryHeightFields = vi.fn((_params: unknown) => ({}));
+const registrySlantFields = vi.fn((_params: unknown): Record<string, unknown> => ({}));
 const registryAssemblyFields = vi.fn((_envelope: unknown, _structure: unknown) => ({
   kind: 'assembly' as const,
   assembledRiseMm: 47,
@@ -48,6 +49,7 @@ vi.mock('@/features/bin-designer/store/customBinRegistry', () => ({
   registryEdgeFields: (params: unknown) => registryEdgeFields(params),
   registryHeightFields: (params: unknown) => registryHeightFields(params),
   registryOverhangFields: () => ({}),
+  registrySlantFields: (params: unknown) => registrySlantFields(params),
 }));
 
 import {
@@ -61,6 +63,7 @@ import { useLayoutStore } from '@/core/store/layout';
 import { useSelectionStore, INITIAL_SELECTION_STATE } from '@/core/store/selection';
 import { useGapFitStore } from '@/core/store/gapFit';
 import { binId, gridUnits, heightUnits } from '@/core/types';
+import { registerLinkedSlantResolver } from '@/shared/utils/placedSlant';
 import type { Bin } from '@/core/types';
 import type { GapFitConstraint } from '@/core/store/gapFit';
 
@@ -177,6 +180,8 @@ describe('communityDesignerBridge', () => {
       registryEdgeFields.mockReturnValue({});
       registryHeightFields.mockReset();
       registryHeightFields.mockReturnValue({});
+      registrySlantFields.mockReset();
+      registrySlantFields.mockReturnValue({});
       const layout = createDefaultLayout();
       useLayoutStore.setState({ layout });
       useSelectionStore.setState({
@@ -295,6 +300,55 @@ describe('communityDesignerBridge', () => {
 
       const placedBin = useLayoutStore.getState().layout.bins.find((b) => b.id !== 'blocker');
       expect(placedBin).toMatchObject({ x: 0, y: 0, width: 3, depth: 2 });
+    });
+
+    it('turns a leaning design where only the turned placement has room for its support', async () => {
+      registrySlantFields.mockReturnValue({
+        slant: { config: { angleDeg: 45, side: 'front', endSupport: true } },
+      });
+      useGapFitStore.getState().setConstraint(constraintFor());
+
+      await expect(placeCommunityDesignInLayout(design)).resolves.toBe('placed');
+
+      const placedBin = useLayoutStore.getState().layout.bins[0];
+      expect(placedBin).toMatchObject({ x: 0, y: 0, width: 3, depth: 2 });
+      expect(registrySlantFields.mock.calls[0][0]).toMatchObject({ slide: expect.anything() });
+    });
+
+    // The probe leans the design without its extra wall, which takes the
+    // linked support a second cell out; only the turned placement has room.
+    it('places it turned when only the turned placement fits its linked support', async () => {
+      const LEFT = { angleDeg: 45, side: 'left' as const, endSupport: true };
+      registrySlantFields.mockReturnValue({ slant: { config: LEFT } });
+      registerLinkedSlantResolver((id) =>
+        id === 'design_new'
+          ? { config: LEFT, extraWallMm: 21, width: 2, depth: 3, height: 6 }
+          : undefined
+      );
+      const layout = useLayoutStore.getState().layout;
+      useLayoutStore.setState({
+        layout: {
+          ...layout,
+          drawer: { ...layout.drawer, width: gridUnits(6), depth: gridUnits(6) },
+        },
+      });
+      useGapFitStore.getState().setConstraint({
+        ...constraintFor(),
+        targetPosition: { x: gridUnits(1), y: gridUnits(2), layerId: layout.layers[0].id },
+      });
+
+      try {
+        await expect(placeCommunityDesignInLayout(design)).resolves.toBe('placed');
+      } finally {
+        registerLinkedSlantResolver(null);
+      }
+
+      expect(useLayoutStore.getState().layout.bins[0]).toMatchObject({
+        x: 1,
+        y: 2,
+        width: 3,
+        depth: 2,
+      });
     });
 
     it('returns no-fit without saving anything when neither orientation fits', async () => {

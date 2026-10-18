@@ -13,6 +13,7 @@ import { isOk } from '@/core/result';
 import { mlTracking } from '@/shared/analytics/useMLTracking';
 import { useTranslation } from '@/i18n';
 import type { InteractionContext, ModeHandlers, DragStartArgs } from './types';
+import { groupMoveLands, moveOrder } from './moveOrder';
 import type {
   BinId,
   Coord,
@@ -426,8 +427,13 @@ export function useDragInteraction(context: InteractionContext): ModeHandlers<Dr
           }
         } else {
           // Move mode: update bin positions
-          // Track move BEFORE executing (capture old positions)
           const binsToMove = findBinsByIds(layout, interaction.binIds);
+          const ordered = moveOrder(binsToMove, deltaX, deltaY, layout);
+          if (!groupMoveLands(ordered, deltaX, deltaY, activeLayerId, layout)) {
+            addToast(getPlacementErrorMessage(t, 'collision'), 'info');
+            return;
+          }
+          // Track move BEFORE executing (capture old positions)
           if (binsToMove.length > 0) {
             const firstBin = binsToMove[0];
             const oldPosition = { x: firstBin.x, y: firstBin.y };
@@ -441,9 +447,8 @@ export function useDragInteraction(context: InteractionContext): ModeHandlers<Dr
           }
 
           execute(() => {
-            for (const binId of interaction.binIds) {
-              const bin = findBinById(layout, binId);
-              if (!bin) continue;
+            for (const bin of ordered) {
+              const binId = bin.id;
 
               updateBin(binId, {
                 x: (bin.x + deltaX) as GridUnits,

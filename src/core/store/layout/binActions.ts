@@ -21,11 +21,7 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
         }
 
         const rect = { x: bin.x, y: bin.y, width: bin.width, depth: bin.depth };
-        const validationResult = canPlaceBin(
-          { ...rect, height: bin.height, linkedDesignId: bin.linkedDesignId },
-          bin.layerId,
-          layout
-        );
+        const validationResult = canPlaceBin(bin, bin.layerId, layout);
         if (!validationResult.valid) {
           return err(toPlacementError(validationResult.reason, rect));
         }
@@ -47,8 +43,9 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
       // Strip id to prevent identity corruption
       const { id: _stripId, ...safeUpdates } = updates;
 
-      // Validate placement when the bin moves, resizes, or changes how tall
-      // it stands (which moves everything resting on it), as `bin.update` does.
+      // Validate placement when the bin moves, resizes, changes how tall it
+      // stands (which moves everything resting on it), or changes what decides
+      // its slant, as `bin.update` does.
       const merged = { ...bin, ...safeUpdates };
       if (
         merged.layerId !== STAGING_ID &&
@@ -58,7 +55,10 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
           updates.depth !== undefined ||
           updates.layerId !== undefined ||
           updates.height !== undefined ||
-          'clearanceHeight' in updates)
+          'clearanceHeight' in updates ||
+          'slant' in updates ||
+          'overhang' in updates ||
+          'extendToMargin' in updates)
       ) {
         const rect = { x: merged.x, y: merged.y, width: merged.width, depth: merged.depth };
         const validationResult = canPlaceBin(
@@ -67,6 +67,9 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
             height: merged.height,
             clearanceHeight: merged.clearanceHeight,
             linkedDesignId: merged.linkedDesignId,
+            slant: merged.slant,
+            extendToMargin: merged.extendToMargin,
+            overhang: merged.overhang,
           },
           merged.layerId,
           layout,
@@ -116,16 +119,10 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
       if (!isOk(found)) return found;
       const bin = found.value;
 
-      const copyAt = (layerId: LayerId, x: GridUnits, y: GridUnits) => ({
-        width: bin.width,
-        depth: bin.depth,
-        height: bin.height,
-        clearanceHeight: bin.clearanceHeight,
-        category: bin.category,
-        label: bin.label,
-        notes: bin.notes,
-        customProperties: bin.customProperties,
-        items: bin.items,
+      // As `bin.duplicate` copies, so the copy is the bin each slot was checked for.
+      const { id: _id, locked: _locked, pairId: _pairId, pairRole: _pairRole, ...copyable } = bin;
+      const copyAt = (layerId: LayerId, x: GridUnits, y: GridUnits): Omit<Bin, 'id'> => ({
+        ...copyable,
         layerId,
         x,
         y,
@@ -158,13 +155,7 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
 
       for (const { dx, dy } of offsets) {
         const placement = canPlaceBin(
-          {
-            x: (bin.x + dx) as GridUnits,
-            y: (bin.y + dy) as GridUnits,
-            width: bin.width,
-            depth: bin.depth,
-            height: bin.height,
-          },
+          copyAt(bin.layerId, (bin.x + dx) as GridUnits, (bin.y + dy) as GridUnits),
           bin.layerId,
           layout
         );
@@ -207,7 +198,13 @@ export function createBinActions(setLocal: SetLocal, get: GetState) {
 
       const rect = { x: x as GridUnits, y: y as GridUnits, width: bin.width, depth: bin.depth };
       const validationResult = canPlaceBin(
-        { ...rect, height: layer.height, linkedDesignId: bin.linkedDesignId },
+        // The move keeps the bin's explicit overhang, so the check must too.
+        {
+          ...rect,
+          height: layer.height,
+          linkedDesignId: bin.linkedDesignId,
+          overhang: bin.overhang,
+        },
         layerId,
         layout,
         id

@@ -12,6 +12,7 @@ import { effectiveGridUnitMmY } from '@/core/types';
 import type { CommunityDesign } from '@/shared/types/community';
 import { assemblyHeightUnits } from '@/shared/types/assemblyPlacement';
 import { GRIDFINITY_SPEC } from '@/shared/printSettings/gridfinityGeometry';
+import { sideInPlacement } from '@/shared/utils/placementTurn';
 import type {
   CommunityEditOriginalOutcome,
   CommunityPlaceOutcome,
@@ -154,6 +155,16 @@ export async function placeCommunityDesignInLayout(
     ) {
       return 'no-fit';
     }
+    // Published params can predate current fields, which the slant facts read.
+    const [{ registrySlantFields }, { migrateParams }] = await Promise.all([
+      import('@/features/bin-designer/store/customBinRegistry'),
+      import('@/features/bin-designer/constants/paramMigration'),
+    ]);
+    const slantFields =
+      assembly === null && design.params !== undefined
+        ? registrySlantFields(migrateParams(design.params))
+        : {};
+    const ownSlant = slantFields.slant?.blocked ? undefined : slantFields.slant?.config;
     const orientations =
       width === depth
         ? [{ width, depth }]
@@ -161,20 +172,27 @@ export async function placeCommunityDesignInLayout(
             { width, depth },
             { width: depth, depth: width },
           ];
-    const fitting = orientations.find(
-      (orientation) =>
-        canPlaceBin(
-          {
-            x,
-            y,
-            width: orientation.width as GridUnits,
-            depth: orientation.depth as GridUnits,
-            height: height as HeightUnits,
-          },
-          layerId,
-          layout
-        ).valid
-    );
+    // A turned placement leans the design's way turned with it, and its end
+    // support has to fit too, as the linked bin's will.
+    const slantIn = (orientation: { width: number }) =>
+      ownSlant && orientation.width !== width
+        ? { ...ownSlant, side: sideInPlacement(ownSlant.side) }
+        : ownSlant;
+    const fitting = orientations.find((orientation) => {
+      const slant = slantIn(orientation);
+      return canPlaceBin(
+        {
+          x,
+          y,
+          width: orientation.width as GridUnits,
+          depth: orientation.depth as GridUnits,
+          height: height as HeightUnits,
+          ...(slant ? { slant } : {}),
+        },
+        layerId,
+        layout
+      ).valid;
+    });
     if (fitting === undefined) return 'no-fit';
 
     const { communityToDesign } = await import('@/features/bin-designer/utils/communityToDesign');
@@ -212,17 +230,38 @@ export async function placeCommunityDesignInLayout(
               ...registryEdgeFields(design.params),
               ...registryHeightFields(design.params),
               ...registryOverhangFields(design.params),
+              ...slantFields,
             }),
         updatedAt: saved.value.updatedAt,
       });
+
+      // The probe leaned the design without its base, extra wall or edges.
+      // Registered, the linked support is exact, and may only fit turned.
+      const registered = useLayoutStore.getState().layout;
+      const placement = [fitting, ...orientations.filter((o) => o !== fitting)].find(
+        (orientation) =>
+          canPlaceBin(
+            {
+              x,
+              y,
+              width: orientation.width as GridUnits,
+              depth: orientation.depth as GridUnits,
+              height: height as HeightUnits,
+              linkedDesignId: saved.value.id,
+            },
+            layerId,
+            registered
+          ).valid
+      );
+      if (placement === undefined) return 'error-copy-saved';
 
       const { commandBus, createCqrsMutations } = await import('@/core/cqrs');
       const result = createCqrsMutations(commandBus).addBin({
         layerId,
         x,
         y,
-        width: fitting.width as GridUnits,
-        depth: fitting.depth as GridUnits,
+        width: placement.width as GridUnits,
+        depth: placement.depth as GridUnits,
         height: height as HeightUnits,
         category: useSelectionStore.getState().activeCategoryId,
         label: '',

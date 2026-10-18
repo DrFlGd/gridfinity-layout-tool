@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { canPlaceBin, maxPlaceableHeight } from './validationPlacement';
 import { registerLinkedExcessResolver } from './collision';
+import { registerLinkedSlantResolver } from './placedSlant';
 import { createTestLayout, createTestBin } from '@/test/testUtils';
 import { STAGING_ID } from '@/core/constants';
 import type { Bin, HeightUnits, Layout, Rect } from '@/core/types';
@@ -639,5 +640,153 @@ describe('maxPlaceableHeight', () => {
     const { layout, bottom } = make();
     layout.bins = layout.bins.filter((b) => b.id !== bottom.id);
     expect(maxPlaceableHeight({ ...bottom, id: binId('gap') }, layout)).toBe(3);
+  });
+});
+
+describe('canPlaceBin with slanted bins', () => {
+  afterEach(() => {
+    registerLinkedSlantResolver(null);
+  });
+
+  const SLANT = { angleDeg: 45, side: 'back' as const, endSupport: true };
+  const slanted = (overrides: Partial<Bin> = {}): Bin =>
+    createTestBin({
+      id: binId('slanted'),
+      layerId: LAYER_1,
+      width: gridUnits(2),
+      height: heightUnits(6),
+      slant: SLANT,
+      ...overrides,
+    });
+  const at = (x: number, y: number, height = 6) =>
+    placementRect({ x, y, width: 2, depth: 1, height });
+
+  it("refuses a bin on another bin's support cells", () => {
+    const layout = makeSingleLayerLayout();
+    layout.bins = [slanted()];
+    const result = canPlaceBin(at(0, 1, 3), LAYER_1, layout);
+    expect(result).toMatchObject({ valid: false, reason: 'collision' });
+    if (result.valid) throw new Error('expected the placement to be rejected');
+    expect(result.blockingInfo?.binId).toBe('slanted');
+    expect(canPlaceBin(at(0, 2, 3), LAYER_1, layout)).toEqual({ valid: true });
+  });
+
+  it('refuses a slant whose support would cover a bin', () => {
+    const layout = makeSingleLayerLayout();
+    layout.bins = [createTestBin({ id: binId('behind'), y: gridUnits(1), width: gridUnits(2) })];
+    expect(canPlaceBin({ ...at(0, 0), slant: SLANT }, LAYER_1, layout)).toMatchObject({
+      valid: false,
+      reason: 'collision',
+    });
+  });
+
+  it('refuses a support past the drawer', () => {
+    const layout = makeSingleLayerLayout();
+    expect(canPlaceBin({ ...at(0, 7), slant: SLANT }, LAYER_1, layout)).toMatchObject({
+      valid: false,
+      reason: 'exceeds_depth',
+    });
+  });
+
+  it('keeps every other layer off a slanted bin and its support', () => {
+    const layout = makeTwoLayerLayout();
+    layout.bins = [slanted()];
+    expect(canPlaceBin(at(0, 1, 3), LAYER_2, layout)).toMatchObject({
+      valid: false,
+      reason: 'blocked_zone',
+    });
+    expect(canPlaceBin(at(4, 0, 3), LAYER_2, layout)).toEqual({ valid: true });
+  });
+
+  it('carries the slant of the bin it moves', () => {
+    const layout = makeSingleLayerLayout();
+    layout.bins = [
+      slanted(),
+      createTestBin({ id: binId('other'), x: gridUnits(4), y: gridUnits(1), width: gridUnits(2) }),
+    ];
+    expect(canPlaceBin(at(4, 0), LAYER_1, layout, binId('slanted'))).toMatchObject({
+      valid: false,
+      reason: 'collision',
+    });
+    expect(
+      canPlaceBin({ ...at(4, 0), slant: undefined }, LAYER_1, layout, binId('slanted'))
+    ).toEqual({ valid: true });
+  });
+
+  it('does not freeze edits to a bin whose support already overlaps', () => {
+    const layout = makeSingleLayerLayout();
+    layout.bins = [
+      slanted(),
+      createTestBin({ id: binId('behind'), y: gridUnits(1), width: gridUnits(2) }),
+    ];
+    expect(
+      canPlaceBin(
+        { ...at(0, 0), slant: { ...SLANT, angleDeg: 40 } },
+        LAYER_1,
+        layout,
+        binId('slanted')
+      )
+    ).toEqual({ valid: true });
+  });
+
+  it('lets an expanded bin, which stands upright, change height where it is', () => {
+    const layout = makeSingleLayerLayout();
+    const overhang = { left: 0, right: 0, front: 0, back: 5 };
+    layout.bins = [slanted({ y: gridUnits(7), overhang })];
+    expect(canPlaceBin(at(0, 7, 5), LAYER_1, layout, binId('slanted'))).toEqual({ valid: true });
+  });
+
+  it('drops the overhang of an expanded bin that moves, as the update does', () => {
+    const layout = makeSingleLayerLayout();
+    const overhang = { left: 0, right: 0, front: 0, back: 5 };
+    layout.bins = [slanted({ y: gridUnits(0), overhang })];
+    expect(canPlaceBin(at(4, 7), LAYER_1, layout, binId('slanted'))).toMatchObject({
+      valid: false,
+      reason: 'exceeds_depth',
+    });
+  });
+
+  it('sizes a linked support from the height its design is being resized to', () => {
+    registerLinkedSlantResolver(() => ({ width: 2, depth: 1, height: 6 }));
+    const layout = makeSingleLayerLayout();
+    layout.bins = [
+      slanted({ linkedDesignId: designId('d1') }),
+      createTestBin({
+        id: binId('behind'),
+        layerId: LAYER_1,
+        y: gridUnits(2),
+        width: gridUnits(2),
+      }),
+    ];
+    expect(canPlaceBin(at(0, 0), LAYER_1, layout, binId('slanted'))).toEqual({ valid: true });
+    expect(canPlaceBin(at(0, 0, 12), LAYER_1, layout, binId('slanted'))).toMatchObject({
+      valid: false,
+      reason: 'collision',
+    });
+  });
+
+  it('keeps the support of the design height while a shrink can still be refused', () => {
+    registerLinkedSlantResolver(() => ({ width: 2, depth: 1, height: 12 }));
+    const layout = makeSingleLayerLayout();
+    layout.bins = [
+      slanted({ linkedDesignId: designId('d1'), height: heightUnits(12) }),
+      createTestBin({
+        id: binId('ahead'),
+        layerId: LAYER_1,
+        x: gridUnits(4),
+        y: gridUnits(2),
+        width: gridUnits(2),
+      }),
+    ];
+    expect(canPlaceBin(at(4, 0, 6), LAYER_1, layout, binId('slanted'))).toMatchObject({
+      valid: false,
+      reason: 'collision',
+    });
+  });
+
+  it('does not freeze edits to a bin whose support already leaves the drawer', () => {
+    const layout = makeSingleLayerLayout();
+    layout.bins = [slanted({ y: gridUnits(7) })];
+    expect(canPlaceBin(at(0, 7, 5), LAYER_1, layout, binId('slanted'))).toEqual({ valid: true });
   });
 });
