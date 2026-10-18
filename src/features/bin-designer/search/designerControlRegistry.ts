@@ -44,6 +44,12 @@ export const DESIGNER_CONTROL_SEARCH: readonly DesignerControlSearchEntry[] = [
     keywordsKey: 'help.target.binDesigner.shape.keywords',
   },
   {
+    controlId: 'bd-slant',
+    titleKey: 'help.target.binDesigner.slant.title',
+    descriptionKey: 'help.target.binDesigner.slant.description',
+    keywordsKey: 'help.target.binDesigner.slant.keywords',
+  },
+  {
     controlId: 'bd-walls',
     titleKey: 'help.target.binDesigner.walls.title',
     descriptionKey: 'help.target.binDesigner.walls.description',
@@ -475,6 +481,8 @@ export interface ControlAvailabilityContext {
   readonly viewMode: 'scroll' | 'rail';
   /** The `sliding_tray` labs flag — the slide-tray section only mounts when on. */
   readonly slideTrayEnabled: boolean;
+  /** The `slant` labs flag, or a design that already leans: when the Slant section mounts. */
+  readonly slantVisible: boolean;
 }
 
 /**
@@ -495,6 +503,8 @@ export function isDesignerControlAvailable(
       return ctx.hasText;
     case 'bd-slide-tray':
       return ctx.slideTrayEnabled;
+    case 'bd-slant':
+      return ctx.slantVisible;
     case 'bd-print-fit':
       return ctx.viewMode === 'rail' || ctx.needsSplit;
     default:
