@@ -71,6 +71,7 @@ export function BinSlantSection({ bin, layout, variant }: BinSlantSectionProps) 
             </div>
             <Stepper
               value={config.angleDeg}
+              syncKey={state.refusals}
               onChange={handlers.setAngle}
               onStep={(delta) => handlers.setAngle(config.angleDeg + delta * ANGLE_STEP_DEG)}
               min={SLANT_MIN_DEG}

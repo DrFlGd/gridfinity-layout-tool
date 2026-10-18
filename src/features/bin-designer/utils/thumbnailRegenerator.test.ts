@@ -124,6 +124,48 @@ describe('regenerateThumbnail', () => {
     setIndexSpy.mockRestore();
   });
 
+  it("draws a slanted bin's end support beside it, and only when the design asks for one", async () => {
+    const addSpy = vi.spyOn(THREE.Object3D.prototype, 'add');
+    const meshesAdded = (): number =>
+      addSpy.mock.calls.filter(([object]) => object instanceof THREE.Mesh).length;
+    const slanted: BinParams = {
+      ...DEFAULT_BIN_PARAMS,
+      base: { ...DEFAULT_BIN_PARAMS.base, stackingLip: false },
+      slant: { angleDeg: 45, side: 'back', endSupport: true },
+    };
+    generateImmediate.mockResolvedValue({
+      mesh: { ...makeMesh(), slantSupportMesh: makeMesh() },
+    });
+
+    await regenerateThumbnail(slanted);
+    expect(meshesAdded()).toBe(2);
+
+    addSpy.mockClear();
+    const { endSupport: _, ...noSupport } = slanted.slant ?? { angleDeg: 45, side: 'back' };
+    await regenerateThumbnail({ ...slanted, slant: noSupport });
+    expect(meshesAdded()).toBe(1);
+
+    addSpy.mockRestore();
+  });
+
+  it('keeps a tall, steeply leaning bin inside the camera far plane', async () => {
+    rendererInstances.length = 0;
+    generateImmediate.mockResolvedValue({ mesh: { ...makeMesh(), slantSupportMesh: makeMesh() } });
+    await regenerateThumbnail({
+      ...DEFAULT_BIN_PARAMS,
+      width: 2,
+      depth: 1,
+      height: 40,
+      base: { ...DEFAULT_BIN_PARAMS.base, stackingLip: false },
+      slant: { angleDeg: 60, side: 'back', endSupport: true },
+    });
+    const [, camera] = rendererInstances[0].render.mock.calls[0] as [
+      unknown,
+      THREE.PerspectiveCamera,
+    ];
+    expect(camera.far).toBeGreaterThan(camera.position.length() + 40 * 7);
+  });
+
   it('skips setIndex when the worker returns an empty index buffer', async () => {
     generateImmediate.mockResolvedValue({
       mesh: makeMesh({ indices: new Uint32Array(0) }),
