@@ -122,6 +122,8 @@ export type SlantExtentInputs = SlantInputs &
     BinParams,
     | 'width'
     | 'depth'
+    | 'fractionalEdgeX'
+    | 'fractionalEdgeY'
     | 'height'
     | 'heightUnitMm'
     | 'extraWallHeightMm'
@@ -160,4 +162,58 @@ export function slantedBinFitsBed(
   const w = params.width * params.gridUnitMm - 0.5 + (slant.axis === 'x' ? offset : 0);
   const d = params.depth * pitchY - 0.5 + (slant.axis === 'y' ? offset : 0);
   return (w <= bedWidthMm && d <= bedDepthMm) || (w <= bedDepthMm && d <= bedWidthMm);
+}
+
+/** Clearance between the leaning wall and the support's slope, measured square to the slope. */
+export const SLANT_SUPPORT_GAP_MM = 0.5;
+
+export interface SlantSupportPlan {
+  readonly slant: SlantPlan;
+  readonly pivotZ: number;
+  readonly topZ: number;
+  readonly topOffsetMm: number;
+  /** Footprint along the slant axis, in grid units. */
+  readonly lengthU: number;
+  /** Footprint across the slant: the bin's own, in grid units. */
+  readonly widthU: number;
+  /**
+   * The bin's leading edge lands on a half-cell line, so the support starts
+   * with a half cell for the rest of its feet to meet the baseplate's pockets.
+   */
+  readonly leadingHalf: boolean;
+  /** The side of the cross axis the bin's own half column sits on, in its frame. */
+  readonly crossEdge: 'start' | 'end';
+}
+
+/**
+ * The wedge a row's last bin rests on: the cells past its footprint, long
+ * enough that the leaning top edge still lands on it.
+ */
+export function planSlantSupport(params: SlantExtentInputs): SlantSupportPlan | null {
+  const slant = resolveSlant(params);
+  if (!slant?.endSupport) return null;
+  const { pivotZ, topZ } = slantSpanZ(params);
+  if (topZ <= pivotZ) return null;
+  const topOffsetMm = slant.k * (topZ - pivotZ);
+  const pitch = slant.axis === 'x' ? params.gridUnitMm : (params.gridUnitMmY ?? params.gridUnitMm);
+  const reachU = (topOffsetMm + SLANT_SUPPORT_GAP_MM * Math.hypot(1, slant.k)) / pitch;
+  const binAlongU = slant.axis === 'x' ? params.width : params.depth;
+  const binEdge = slant.axis === 'x' ? params.fractionalEdgeX : params.fractionalEdgeY;
+  // A fractional bin's half column sits on its 'end' side unless set to 'start';
+  // leaning toward that side puts the leading edge on a half-cell line.
+  const leadingHalf =
+    binAlongU % 1 !== 0 && (slant.sign === 1 ? binEdge !== 'start' : binEdge === 'start');
+  const lengthU = leadingHalf
+    ? Math.max(0, Math.ceil(reachU - 0.5 - 1e-9)) + 0.5
+    : Math.max(1, Math.ceil(reachU - 1e-9));
+  return {
+    slant,
+    pivotZ,
+    topZ,
+    topOffsetMm,
+    lengthU,
+    widthU: slant.axis === 'x' ? params.depth : params.width,
+    leadingHalf,
+    crossEdge: slant.axis === 'x' ? params.fractionalEdgeY : params.fractionalEdgeX,
+  };
 }
