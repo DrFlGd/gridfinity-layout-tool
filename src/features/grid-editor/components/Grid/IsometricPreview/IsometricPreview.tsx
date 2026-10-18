@@ -3,6 +3,7 @@ import { Canvas } from '@react-three/fiber';
 import '@/shared/webgl/configureTroikaText';
 import { Scene } from './Scene';
 import { BatchedCornerMarkers } from './BatchedCornerMarkers';
+import { SlantSupportWedges } from './SlantSupportWedges';
 import { BinOverhangExtensions } from './BinOverhangExtensions';
 import { MergedBinMeshes } from './MergedBinMeshes';
 import { ExplodedLayerGroup } from './ExplodedLayerGroup';
@@ -214,6 +215,7 @@ export function IsometricPreview(props: IsometricPreviewProps) {
                   depth: binData.bin.depth,
                   height: binData.height,
                   opacity: binData.opacity,
+                  ...(binData.shear ? { shear: binData.shear } : {}),
                 }))}
               />
               {/* Drawer-margin extensions (Labs) — solid strips filling the margin
@@ -224,6 +226,7 @@ export function IsometricPreview(props: IsometricPreviewProps) {
                 drawerDepth={drawer.depth}
                 designGeometries={designGeometries}
               />
+              <SlantSupportWedges bins={binsToRender} designGeometries={designGeometries} />
             </>
           )}
         </Scene>
