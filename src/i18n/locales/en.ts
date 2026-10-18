@@ -2873,6 +2873,10 @@ const en: Record<string, string> = {
   'binDesigner.panel.viewAsScroll': 'Single scroll',
   'binDesigner.panel.viewAsRail': 'Compact sections',
   'binDesigner.printFit.fits': 'Fits your {width} × {depth} mm print bed.',
+  'binDesigner.printFit.slantTooLarge':
+    'This slanted bin is too big for your {width} \u00d7 {depth} mm print bed.',
+  'binDesigner.printFit.slantTooLargeDetail':
+    "A slanted bin can't be split, so lower the angle or make the bin smaller.",
   'binDesigner.dependency.enableStackingLip': 'Enable stacking lip',
   'binDesigner.dependency.editFootprint': 'Edit footprint',
   'binDesigner.multiColor.enableHint':

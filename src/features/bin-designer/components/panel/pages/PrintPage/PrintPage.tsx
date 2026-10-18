@@ -6,6 +6,7 @@ import { SplitOptionsSection } from '../../SplitOptionsSection';
 import { useSplitOptionsSection } from '../../SplitOptionsSection/useSplitOptionsSection';
 import { PhysicalUnitsSection } from '../../PhysicalUnitsSection';
 import { SetDefaultFooter } from '../../SetDefaultFooter';
+import { SlantTooLargeNotice } from '../../shared';
 
 /**
  * Print & output: bed fit (always rendered — a passive all-clear when the bin
@@ -14,7 +15,7 @@ import { SetDefaultFooter } from '../../SetDefaultFooter';
  */
 export function PrintPage() {
   const t = useTranslation();
-  const { needsSplit, printBedSize } = useSplitOptionsSection();
+  const { needsSplit, slantTooLarge, printBedSize } = useSplitOptionsSection();
   const setExportDialogOpen = useDesignerStore((s) => s.setExportDialogOpen);
   const canExport = useDesignerStore(
     (s) =>
@@ -26,7 +27,9 @@ export function PrintPage() {
   return (
     <div className="divide-y divide-stroke-subtle/50">
       <PanelSection helpTarget="bd-print-fit">
-        {needsSplit ? (
+        {slantTooLarge ? (
+          <SlantTooLargeNotice width={printBedSize.width} depth={printBedSize.depth} />
+        ) : needsSplit ? (
           <SplitOptionsSection />
         ) : (
           <p className="text-label text-content-tertiary">
