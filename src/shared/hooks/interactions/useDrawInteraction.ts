@@ -4,6 +4,7 @@ import {
   useInteractionStore,
   useHalfGridModeStore,
   useToastStore,
+  useLibraryStore,
 } from '@/core/store';
 import { useBinExampleGalleryStore } from '@/core/store/binExampleGallery';
 import { useGapFitStore } from '@/core/store/gapFit';
@@ -13,6 +14,7 @@ import { CONSTRAINTS, snapToGrid } from '@/core/constants';
 import { binId, effectiveGridUnitMmY, heightUnits } from '@/core/types';
 import { snapDrawRect } from '@/shared/utils/snap';
 import { capturePointer } from './interaction';
+import { paintSlantedRows } from './paintSlantedRows';
 import { isOk } from '@/core/result';
 import { useTranslation } from '@/i18n';
 import { mlTracking } from '@/shared/analytics/useMLTracking';
@@ -49,6 +51,7 @@ export function useDrawInteraction(context: InteractionContext): ModeHandlers<Dr
     activeLayerId,
     activeCategoryId,
     paintSize,
+    paintSlant,
     setInteraction,
     setSelectedBin,
     setSelectedBins,
@@ -78,6 +81,7 @@ export function useDrawInteraction(context: InteractionContext): ModeHandlers<Dr
           paintSize,
           start: coord,
           current: coord,
+          ...(paintSlant ? { slant: paintSlant } : {}),
         });
         return;
       }
@@ -90,7 +94,7 @@ export function useDrawInteraction(context: InteractionContext): ModeHandlers<Dr
         ...(fitsGap !== undefined ? { fitsGap } : {}),
       });
     },
-    [paintSize, setInteraction, activePointerIdRef, capturedPointerRef]
+    [paintSize, paintSlant, setInteraction, activePointerIdRef, capturedPointerRef]
   );
 
   /**
@@ -256,6 +260,51 @@ export function useDrawInteraction(context: InteractionContext): ModeHandlers<Dr
       const halfGridModeNow = useHalfGridModeStore.getState().halfGridMode;
       const minSizeNow = halfGridModeNow ? 0.5 : 1;
       const layer = layout.layers.find((l) => l.id === activeLayerId);
+
+      const rowSlant = interaction.slant;
+      if (rowSlant && layer) {
+        const layoutId = useLibraryStore.getState().library.activeLayoutId;
+        const editorLayoutId = useLayoutStore.getState().activeLayoutId;
+        void paintSlantedRows({
+          layout,
+          layerId: activeLayerId,
+          categoryId: activeCategoryId,
+          size: ps,
+          slant: rowSlant,
+          start,
+          current,
+          minSize: minSizeNow,
+          addBin,
+          execute,
+          onPlaced: (ids) => {
+            setSelectedBins(ids);
+            const byId = new Set(ids);
+            const placed = useLayoutStore.getState().layout.bins.filter((b) => byId.has(b.id));
+            mlTracking.trackBulkCreation(placed, 'paint');
+            trackPaintMode('exited', ids.length);
+          },
+          onFailed: (reason) =>
+            addToast({
+              message: t(`layers.slantedRow.${reason}`),
+              type: reason === 'saveFailed' ? 'error' : 'info',
+            }),
+          // A shared preview swaps the editor's layout without touching the library.
+          stillCurrent: () => {
+            const editor = useLayoutStore.getState();
+            return (
+              editor.activeLayoutId === editorLayoutId &&
+              useLibraryStore.getState().library.activeLayoutId === layoutId &&
+              editor.layout.categories.some((c) => c.id === activeCategoryId)
+            );
+          },
+          designName: (height) =>
+            t('layers.slantedRow.designName', {
+              size: `${ps.width}×${ps.depth}×${height}`,
+              angle: rowSlant.angleDeg,
+            }),
+        });
+        return;
+      }
 
       // Single-click placement: when user clicks without dragging, place one bin
       // centered on the clicked position, clamped to drawer bounds

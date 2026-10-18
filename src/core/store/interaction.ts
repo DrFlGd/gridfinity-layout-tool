@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Interaction } from '@/core/types';
+import type { Interaction, SlantConfig } from '@/core/types';
 
 /**
  * Interaction Store
@@ -31,6 +31,7 @@ interface InteractionState {
   dropTarget: DropTarget;
 
   paintSize: PaintSize | null;
+  paintSlant: SlantConfig | null;
 
   /** One-shot "find bins that fit" mode: the next draw on empty space selects a gap for the community gallery instead of creating a bin. */
   gapSelectArmed: boolean;
@@ -49,6 +50,7 @@ interface InteractionActions {
 
   setPaintSize: (size: PaintSize | null) => void;
   togglePaintSize: (size: PaintSize) => void;
+  setPaintSlant: (slant: SlantConfig | null) => void;
 
   setGapSelectArmed: (armed: boolean) => void;
 
@@ -66,6 +68,7 @@ export const INITIAL_INTERACTION_STATE = {
   interaction: null as Interaction | null,
   dropTarget: null as DropTarget,
   paintSize: null as PaintSize | null,
+  paintSlant: null as SlantConfig | null,
   gapSelectArmed: false,
   keyboardDragMode: false,
   keyboardResizeMode: false,
@@ -94,6 +97,8 @@ export const useInteractionStore = create<InteractionStore>((set) => ({
       ...(state.paintSize === null ? { gapSelectArmed: false } : {}),
     }));
   },
+
+  setPaintSlant: (slant) => set({ paintSlant: slant }),
 
   setGapSelectArmed: (armed) =>
     set(armed ? { gapSelectArmed: true, paintSize: null } : { gapSelectArmed: false }),
