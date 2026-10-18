@@ -14,7 +14,7 @@ import type { OverhangConfig } from '@/shared/types/bin';
 import { getGridBins } from '@/shared/utils';
 import { getSplitPositions } from '@/shared/utils/splitPositions';
 import { binSplitChunkUnits } from '@/shared/utils/binSplitFit';
-import { overhangKey, resolveOverhang } from '@/shared/utils/overhang';
+import { hasOverhang, overhangKey, resolveOverhang } from '@/shared/utils/overhang';
 import {
   calcFilamentCost,
   calcSpoolPercentage,
@@ -174,6 +174,14 @@ function fitForBin(
   fit: PrintSplitFit
 ): { maxWidth: number; maxDepth: number; key: string } {
   const overhang = fit.overhangFor?.(bin);
+  if (bin.slant && !hasOverhang(resolveOverhang(overhang))) {
+    const { angleDeg, side, endSupport } = bin.slant;
+    return {
+      maxWidth: bin.width,
+      maxDepth: bin.depth,
+      key: `${overhangKey(resolveOverhang(overhang))}|slant:${angleDeg}:${side}:${endSupport === true ? 's' : ''}`,
+    };
+  }
   const limit = binSplitChunkUnits(
     {
       width: bin.width,
