@@ -5,7 +5,8 @@
  * or outdated thumbnails on idle time. Without this, fresh / imported / version-
  * bumped designs only get their thumbnail on the user's *next* modal open —
  * which is exactly when they notice it's missing. The same pass registers any
- * stored Workshop assembly or imported mesh that has no registry entry.
+ * stored Workshop assembly or imported mesh that has no registry entry, and
+ * brings every entry's slant facts up to its design.
  *
  * Coordination contract:
  *  - **Sync**: signed-in users wait for the sync store to leave `'syncing'`
@@ -23,7 +24,8 @@
  */
 
 import { useEffect } from 'react';
-import { isOk } from '@/core/result';
+import { isErr, isOk } from '@/core/result';
+import { createLogger } from '@/core/logger';
 import { bridgeManager } from '@/shared/generation/bridge';
 import { trackEvent } from '@/shared/analytics/posthog';
 import { useSessionStore } from '@/core/sync/session/useSession';
@@ -34,6 +36,7 @@ import {
   loadRegistry,
   upsertRegistryEntry,
   registryItemEntry,
+  refreshRegistrySlants,
   registryEdgeFields,
   registryHeightFields,
   registryOverhangFields,
@@ -44,6 +47,8 @@ import { regenerateThumbnail } from '../utils/thumbnailRegenerator';
 import { updateThumbnailCache } from './useDesignThumbnail';
 import { THUMBNAIL_VERSION } from '../types';
 import type { SavedDesign } from '../types';
+
+const logger = createLogger('ThumbnailRegen');
 
 /** localStorage key for the persisted preview color (mirrors PreviewCanvas). */
 const PREVIEW_COLOR_KEY = 'gridfinity-designer-preview-color';
@@ -280,6 +285,15 @@ export function useBackgroundThumbnailRegen(): void {
         if (!isOk(listResult)) return;
 
         registerUnlistedItems(listResult.value);
+        // An entry written before it carried slant facts reads as an upright
+        // design on default units, so the layout reserves no end support for
+        // a design that leans, and previews its overhung placements leaning.
+        const refreshed = refreshRegistrySlants(
+          listResult.value.flatMap((d) => (d.params ? [{ id: d.id, params: d.params }] : []))
+        );
+        if (isErr(refreshed)) {
+          logger.warn('Registry slant refresh failed', { code: refreshed.error.code });
+        }
 
         const stale = listResult.value.filter(needsRegen);
         if (stale.length === 0) return;

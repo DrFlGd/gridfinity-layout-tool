@@ -35,6 +35,7 @@ vi.mock('../store/customBinRegistry', async (importOriginal) => {
     upsertRegistryEntry: vi.fn(),
     loadRegistry: vi.fn(() => []),
     registryItemEntry: actual.registryItemEntry,
+    refreshRegistrySlants: vi.fn(),
     registryEdgeFields: vi.fn(() => ({})),
     registryHeightFields: vi.fn(() => ({})),
     registryOverhangFields: vi.fn(() => ({})),
@@ -60,7 +61,11 @@ vi.mock('@/shared/analytics/posthog', () => ({
 
 import { regenerateThumbnail } from '../utils/thumbnailRegenerator';
 import type * as CustomBinRegistry from '../store/customBinRegistry';
-import { loadRegistry, upsertRegistryEntry } from '../store/customBinRegistry';
+import {
+  loadRegistry,
+  refreshRegistrySlants,
+  upsertRegistryEntry,
+} from '../store/customBinRegistry';
 import * as DesignerStorage from '@/features/bin-designer/storage/DesignerStorage';
 import { bridgeManager } from '@/shared/generation/bridge';
 import { trackEvent } from '@/shared/analytics/posthog';
@@ -180,6 +185,7 @@ describe('useBackgroundThumbnailRegen', () => {
     });
 
     vi.mocked(regenerateThumbnail).mockResolvedValue('data:image/webp;base64,FAKE');
+    vi.mocked(refreshRegistrySlants).mockReturnValue(ok(undefined));
     vi.mocked(DesignerStorage.updateDesignThumbnail).mockImplementation((id) =>
       Promise.resolve(
         ok({
@@ -502,6 +508,32 @@ describe('useBackgroundThumbnailRegen', () => {
         await new Promise((r) => setTimeout(r, 10));
       });
       expect(upsertRegistryEntry).not.toHaveBeenCalled();
+    });
+  });
+
+  it('keeps regenerating thumbnails when the registry slant refresh fails', async () => {
+    vi.mocked(refreshRegistrySlants).mockReturnValue(err(storageUnavailable('localStorage')));
+    vi.mocked(DesignerStorage.listDesigns).mockResolvedValue(ok([makeDesign()]));
+
+    renderHook(() => useBackgroundThumbnailRegen());
+
+    await waitFor(() => {
+      expect(regenerateThumbnail).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('brings every parametric design into the registry slant refresh, thumbnail current or not', async () => {
+    const current = makeDesign({
+      id: 'd1',
+      thumbnail: 'fresh',
+      thumbnailVersion: THUMBNAIL_VERSION,
+    });
+    vi.mocked(DesignerStorage.listDesigns).mockResolvedValue(ok([current, makeAssembly('w')]));
+
+    renderHook(() => useBackgroundThumbnailRegen());
+
+    await waitFor(() => {
+      expect(refreshRegistrySlants).toHaveBeenCalledWith([{ id: 'd1', params: current.params }]);
     });
   });
 });
