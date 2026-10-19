@@ -8,6 +8,8 @@ import {
 } from '@/shared/utils/placedSlant';
 import { insideDrawer } from '@/shared/utils/validationPlacement';
 import { getBinsLinkedToDesign } from './linkageQueries';
+import { planSiblingCascade } from './linkingRules';
+import { createBinSyncUpdate } from './syncOperations';
 
 type Refusal = Extract<ValidationResult, { valid: false }>;
 
@@ -33,11 +35,39 @@ function standings(layout: Layout, linkedDesignId: DesignId): Map<BinId, Standin
 }
 
 /**
+ * The layout as the cascade in `useBinResizedListener` leaves it. Resizing drops
+ * a placement's explicit overhang, as `bin.update` does.
+ */
+function cascaded(
+  layout: Layout,
+  linkedDesignId: DesignId,
+  size: { readonly width: number; readonly depth: number; readonly height: number }
+): Layout {
+  const { syncable, allEligible } = planSiblingCascade(
+    getBinsLinkedToDesign(layout.bins, linkedDesignId),
+    size,
+    layout
+  );
+  if (syncable.length === 0 || !allEligible) return layout;
+  const resized = new Set(syncable.map((bin) => bin.id));
+  const update = createBinSyncUpdate(size);
+  return {
+    ...layout,
+    bins: layout.bins.map((bin) => {
+      if (!resized.has(bin.id)) return bin;
+      const { overhang: _dropped, ...rest } = bin;
+      return { ...rest, ...update };
+    }),
+  };
+}
+
+/**
  * The first placement of a design whose end support would collide or leave
  * the drawer once the design takes `size`, comparing every placement as it
- * stands with how it would stand, so a problem one already had never blocks
- * the resize. Each placement reads its support from the design, so the check
- * runs before the design changes and covers them all together.
+ * stands with how it would stand after the cascade, so a problem one already
+ * had never blocks the resize. Each placement reads its support from the
+ * design, so the check runs before the design changes and covers them all
+ * together.
  */
 export function resizeBlockedBySupport(
   layout: Layout,
@@ -48,7 +78,7 @@ export function resizeBlockedBySupport(
   const after = withLinkedSlantFacts(
     linkedDesignId,
     (facts) => facts && { ...facts, ...size },
-    () => standings(layout, linkedDesignId)
+    () => standings(cascaded(layout, linkedDesignId, size), linkedDesignId)
   );
   for (const [id, now] of after) {
     const was = before.get(id);
