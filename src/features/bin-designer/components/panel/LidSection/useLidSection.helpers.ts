@@ -3,10 +3,19 @@ import {
   LID_CORNER_RADIUS,
   LID_FIT_CLEARANCE,
   LID_MIN_RAIL_LENGTH,
+  resolveCutoutLeanDeg,
+  type BinParams,
+  type Cutout,
   type LidClickRails,
   type LidConfig,
   type LidRailSide,
 } from '@/features/bin-designer/types';
+import { binDimensions } from '@/features/bin-designer/utils/binDimensions';
+import { slideLidFillOffsetMm } from '@/features/bin-designer/utils/slideLidPlanForParams';
+import { clearedProfile, entryChamferWidth, MIN_LOFTED_CHAMFER } from '@/shared/utils/cutoutFit';
+import { pathCutoutCut } from '@/shared/utils/pathCutoutOutline';
+import { planNestedOpenings, type NestedOpening } from '@/shared/utils/nestedCutoutOpenings';
+import { hasTaper, resolveOverhang } from '@/shared/utils/overhang';
 import type { useTranslation } from '@/i18n';
 import {
   railSegmentsClearOfBlocks,
@@ -240,7 +249,7 @@ export function computeRailSummary(
 // The rail is only segmented around the tabs, so the button offered to
 // destroy user content to recover part of one wall. The warning still explains
 // the trade and the user can turn labels off themselves.
-export const FIXABLE_IDS: ReadonlySet<LidCompatibilityId> = new Set<LidCompatibilityId>([
+const FIXABLE_IDS: ReadonlySet<LidCompatibilityId> = new Set<LidCompatibilityId>([
   'wallCutouts',
   'wallCutoutsAllSides',
   'wallPattern',
@@ -251,5 +260,110 @@ export const FIXABLE_IDS: ReadonlySet<LidCompatibilityId> = new Set<LidCompatibi
   // is a single Base switch, and the placement the user just chose is what
   // makes it impossible.
   'slideFlushNeedsNoLip',
+  'slideFillTooHigh',
   'hingeStackableTop',
 ]);
+
+const FIXABLE_IDS_WITHOUT_FILL: ReadonlySet<LidCompatibilityId> = new Set(
+  [...FIXABLE_IDS].filter((id) => id !== 'slideFillTooHigh')
+);
+
+/**
+ * A pocket's wall and chamfer-rim outlines as local Y coordinates, vertex for
+ * vertex, in the frame the lean turns. A path is cut from its own cleared
+ * outline, whose mitered corners can grow past the clearance; the straight cut
+ * and the bounding box the builder falls back to count toward its wall too.
+ */
+function pocketSections(cutout: Cutout, chamfer: number): { wall: number[]; rim: number[] } {
+  const { clearance, d } = clearedProfile(cutout);
+  if (cutout.shape !== 'path')
+    return { wall: [-d / 2, d / 2], rim: [-d / 2 - chamfer, d / 2 + chamfer] };
+  const cut = pathCutoutCut(cutout, clearance, chamfer);
+  const straight = chamfer > 0 ? pathCutoutCut(cutout, clearance, 0) : null;
+  const box = [-cutout.depth / 2, cutout.depth / 2];
+  if (!cut) return { wall: box, rim: box };
+  const extra = [...(straight?.base ?? []).map((pt) => pt.y), ...box];
+  return {
+    wall: [...cut.base.map((pt) => pt.y), ...extra],
+    rim: [...cut.rim.map((pt) => pt.y), ...extra],
+  };
+}
+
+/**
+ * Fill height a pocket needs to keep its depth. The worker clamps the drawn
+ * depth to the fill, then turns the tool about local X through its mouth, so a
+ * point `h` down the axis at local `y` lands `h·cos − y·sin` below the fill:
+ * the floor is `h = D`, the chamfer's rim the mouth.
+ */
+function pocketReachMm(cutout: Cutout): number {
+  const lean = (resolveCutoutLeanDeg(cutout) * Math.PI) / 180;
+  const sin = Math.sin(lean);
+  const dip = (ys: readonly number[]): number => Math.max(...ys.map((y) => -y * sin));
+  const chamfer = entryChamferWidth(cutout);
+  const lofted = chamfer > MIN_LOFTED_CHAMFER;
+  const { wall, rim } = pocketSections(cutout, lofted ? chamfer : 0);
+  const reach = Math.max(cutout.cutDepth, cutout.cutDepth * Math.cos(lean) + dip(wall));
+  return lofted ? Math.max(reach, dip(rim)) : reach;
+}
+
+/**
+ * How far below the fill a flare the worker cuts at a shallower pocket's floor
+ * reaches. It sits `floorDepth / cos` down the leaned axis, so `floorDepth`
+ * below the fill, and its rim is lerped from wall to rim by its width.
+ */
+function flareReachMm(opening: NestedOpening): number {
+  const pocket = opening.pocket;
+  const sin = Math.sin((resolveCutoutLeanDeg(pocket) * Math.PI) / 180);
+  const chamfer = entryChamferWidth(pocket);
+  if (chamfer <= MIN_LOFTED_CHAMFER || opening.flare > chamfer) return 0;
+  const { wall, rim } = pocketSections(pocket, chamfer);
+  const t = opening.flare / chamfer;
+  return opening.floorDepth + Math.max(...wall.map((y, i) => -(y + ((rim[i] ?? y) - y) * t) * sin));
+}
+
+/**
+ * Would a fill at `topOffset` cut any pocket short?
+ *
+ * Lowering the fill moves every pocket straight down, and vertical walls clip
+ * it the same at any height, so the fill's height is the one bound that moves: a
+ * pocket keeps its depth exactly when it still fits inside the lowered fill. A
+ * mesh imprint could sink on into the socket, but under the body there is
+ * material only inside each foot, so one crossing a seam would open through
+ * the underside. A tapered wall narrows with depth, so there any pocket may
+ * lose to it.
+ */
+function fillShortensPockets(params: BinParams, topOffset: number): boolean {
+  const pockets = params.cutouts.filter((c) => c.hidden !== true && c.shape !== 'text');
+  if (pockets.length === 0) return false;
+  if (hasTaper(resolveOverhang(params.overhang))) return true;
+  const { wallHeight } = binDimensions(params);
+  const fill = wallHeight - topOffset;
+  const drawn = pockets.filter((c) => c.shape !== 'mesh');
+  // Below the shell's own floor a drawn pocket is cut from a plane that floor
+  // sits over, which seals it. A mesh imprint cuts the finished bin instead.
+  if (drawn.length > 0 && fill < params.wallThickness) return true;
+  const short = pockets.some(
+    (c) => (c.shape === 'mesh' ? c.cutDepth : pocketReachMm(c)) > fill + 1e-6
+  );
+  if (short) return true;
+  // A level pocket's flares sit no deeper than its floor, so only a lean needs
+  // the worker's nesting plan. Planned without scoops, whose reserve can only
+  // narrow a flare, so no flare it cuts is missed.
+  if (!drawn.some((c) => resolveCutoutLeanDeg(c) !== 0)) return false;
+  const unscooped = drawn.map(
+    ({ scoopRadiusW: _w, scoopRadiusD: _d, scoopEdges: _e, ...rest }): Cutout => rest
+  );
+  return planNestedOpenings(unscooped, fill).flares.some((o) => flareReachMm(o) > fill + 1e-6);
+}
+
+/**
+ * The issues this design offers a one-click Fix for. Pockets are cut down from
+ * the fill, so lowering it can leave a deep one short of its depth; that trade
+ * is left to the cutout editor, which reports the shortfall.
+ */
+export function fixableIdsFor(params: BinParams): ReadonlySet<LidCompatibilityId> {
+  const offset = slideLidFillOffsetMm(params);
+  return offset !== null && fillShortensPockets(params, offset)
+    ? FIXABLE_IDS_WITHOUT_FILL
+    : FIXABLE_IDS;
+}

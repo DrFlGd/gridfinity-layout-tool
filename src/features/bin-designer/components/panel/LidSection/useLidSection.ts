@@ -68,7 +68,7 @@ import type { SnappingSliderOption } from '../../controls/SnappingSlider';
 import {
   buildBlockerReason,
   computeRailSummary,
-  FIXABLE_IDS,
+  fixableIdsFor,
   LID_TOP_SURFACES,
   lidValueSummary,
   type LidTopSurface,
@@ -98,7 +98,10 @@ import type {
   LidSlidePull,
   LidHingeCatch,
 } from '@/features/bin-designer/types/lid';
-import { slideLidPlanForParams } from '@/features/bin-designer/utils/slideLidPlanForParams';
+import {
+  slideLidFillOffsetMm,
+  slideLidPlanForParams,
+} from '@/features/bin-designer/utils/slideLidPlanForParams';
 import { slideSagSafeThicknessMm } from '@/shared/utils/slideLidPlan';
 
 function ceilToThicknessStep(mm: number): number {
@@ -134,6 +137,7 @@ export function useLidSection() {
     updateWalls,
     updateHandles,
     updateWallPattern,
+    updateCutoutConfig,
     setParam,
     setLidText,
     setLidTextStyle,
@@ -153,6 +157,7 @@ export function useLidSection() {
       updateWalls: s.updateWalls,
       updateHandles: s.updateHandles,
       updateWallPattern: s.updateWallPattern,
+      updateCutoutConfig: s.updateCutoutConfig,
       setParam: s.setParam,
       setLidText: s.setLidText,
       setLidTextStyle: s.setLidTextStyle,
@@ -166,6 +171,7 @@ export function useLidSection() {
   );
 
   const compatibilityIssues = useMemo(() => checkLidCompatibility(params), [params]);
+  const fixableIds = useMemo(() => fixableIdsFor(params), [params]);
   // Per-side rail conflicts (label tabs, wall cutouts, intruding handles).
   // Derived from the already-memoized issue list — avoids running the
   // compatibility scan a second time per params change. The worker side
@@ -749,6 +755,11 @@ export function useLidSection() {
         case 'slideFlushNeedsNoLip':
           updateBase({ stackingLip: false });
           return;
+        case 'slideFillTooHigh': {
+          const topOffset = slideLidFillOffsetMm(params);
+          if (topOffset !== null) updateCutoutConfig({ topOffset });
+          return;
+        }
         // Through the picker's own write so the grid-only options (magnet
         // pockets, lip-only, separate plate) are cleared with the grid.
         case 'hingeStackableTop':
@@ -771,10 +782,11 @@ export function useLidSection() {
       }
     },
     [
-      params.dividerPieces,
+      params,
       setParam,
       setTopSurface,
       updateBase,
+      updateCutoutConfig,
       updateHandles,
       updateWalls,
       updateWallPattern,
@@ -994,7 +1006,7 @@ export function useLidSection() {
       dimensionsReadout,
       railsReadout,
       compatibilityIssues,
-      fixableIds: FIXABLE_IDS,
+      fixableIds,
       // Lid-top text
       lidText,
       textMode,

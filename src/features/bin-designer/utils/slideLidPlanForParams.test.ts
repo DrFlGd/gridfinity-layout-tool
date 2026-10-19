@@ -13,7 +13,8 @@ import { describe, it, expect } from 'vitest';
 import { DEFAULT_BIN_PARAMS } from '../constants';
 import { DEFAULT_LID_SLIDE_CONFIG } from '../types/lid';
 import type { BinParams, LidSlideConfig } from '../types';
-import { slideLidPlanForParams } from './slideLidPlanForParams';
+import { CUTOUT_FILL_STEP_MM } from './cutoutFill';
+import { slideLidFillOffsetMm, slideLidPlanForParams } from './slideLidPlanForParams';
 
 function slideParams(
   overrides: Partial<BinParams> = {},
@@ -111,5 +112,133 @@ describe('slideLidPlanForParams', () => {
   it('refuses a custom shape, which has no polygon-edge mapping', () => {
     const masked = slideParams({ cellMask: { cols: 3, rows: 2, cells: [1, 1, 1, 1, 1, 0] } });
     expect(slideLidPlanForParams(masked).rejection).toBe('unsupported-shape');
+  });
+});
+
+/** A 1x2x5 solid cutout bin whose fill sits `topOffset` below the rim. */
+function solidParams(topOffset: number, overrides: Partial<BinParams> = {}): BinParams {
+  return slideParams({
+    width: 1,
+    depth: 2,
+    height: 5,
+    style: 'solid',
+    base: { ...DEFAULT_BIN_PARAMS.base, solid: true },
+    cutoutConfig: { ...DEFAULT_BIN_PARAMS.cutoutConfig, topOffset },
+    ...overrides,
+  });
+}
+
+describe('a solid bin', () => {
+  it('carries the channel in the recess above its fill', () => {
+    const { geometry, rejection } = slideLidPlanForParams(solidParams(10));
+    expect(rejection).toBeNull();
+    expect(geometry).not.toBeNull();
+  });
+
+  it('refuses a fill flush with the rim, which leaves no cavity', () => {
+    expect(slideLidPlanForParams(solidParams(0)).rejection).toBe('no-cavity');
+  });
+
+  it('refuses a recess shallower than the joint', () => {
+    expect(slideLidPlanForParams(solidParams(5)).rejection).toBe('bin-too-shallow');
+  });
+
+  it('counts only the recess above a tapered wall’s band', () => {
+    // The band clips the recess inside it to a wall narrower than the
+    // rim-sized plate; above it the recess keeps its full width. The fill tops
+    // out at 20.25mm and the wall at 30.25mm.
+    const taper = (bandHeight: number): BinParams['overhang'] => ({
+      enabled: true,
+      left: 10,
+      right: 0,
+      front: 0,
+      back: 0,
+      taper: {
+        enabled: true,
+        profile: 'chamfer',
+        bandHeight,
+        left: 10,
+        right: 0,
+        front: 0,
+        back: 0,
+      },
+    });
+    const plan = (bandHeight: number) =>
+      slideLidPlanForParams(solidParams(10, { overhang: taper(bandHeight) }));
+    expect(plan(15).geometry).not.toBeNull();
+    // Into the band, with 9.25mm of full-width recess still above it.
+    expect(plan(21).geometry).not.toBeNull();
+    // 0.25mm above the band.
+    expect(plan(30).rejection).toBe('bin-too-shallow');
+  });
+
+  it('finds no recess in a tapered bin whose offset outlived a taller one', () => {
+    // The tapered body keeps its whole loft once the fill is gone.
+    const tapered = solidParams(40, {
+      height: 3,
+      overhang: {
+        enabled: true,
+        left: 10,
+        right: 0,
+        front: 0,
+        back: 0,
+        taper: {
+          enabled: true,
+          profile: 'chamfer',
+          bandHeight: 20,
+          left: 10,
+          right: 0,
+          front: 0,
+          back: 0,
+        },
+      },
+    });
+    expect(slideLidPlanForParams(tapered).rejection).toBe('no-cavity');
+    expect(slideLidFillOffsetMm(tapered)).toBeNull();
+  });
+
+  it('measures no deeper than the bin when the offset outlived a taller one', () => {
+    // A rim-anchored offset survives a height cut, and past the floor the shell
+    // drops the fill, so the bin has only its own cavity to offer.
+    const outlived = solidParams(20, { height: 2 });
+    const hollow = slideParams({ width: 1, depth: 2, height: 2 });
+    expect(slideLidPlanForParams(hollow).rejection).toBe('bin-too-shallow');
+    expect(slideLidPlanForParams(outlived).rejection).toBe('bin-too-shallow');
+  });
+});
+
+describe('slideLidFillOffsetMm', () => {
+  it('names the shallowest fill step that gets the channel built', () => {
+    const offset = slideLidFillOffsetMm(solidParams(0));
+    expect(offset).not.toBeNull();
+    const lowered = offset ?? 0;
+    expect(Number.isInteger(lowered / CUTOUT_FILL_STEP_MM)).toBe(true);
+    expect(slideLidPlanForParams(solidParams(lowered)).geometry).not.toBeNull();
+    expect(slideLidPlanForParams(solidParams(lowered - CUTOUT_FILL_STEP_MM)).geometry).toBeNull();
+  });
+
+  it('asks less of a lipless bin, whose channel sits higher', () => {
+    const lipless = solidParams(0, {
+      base: { ...DEFAULT_BIN_PARAMS.base, solid: true, stackingLip: false },
+    });
+    expect(slideLidFillOffsetMm(lipless) ?? Infinity).toBeLessThan(
+      slideLidFillOffsetMm(solidParams(0)) ?? 0
+    );
+  });
+
+  it('has no answer when the bin is too short for any fill to clear the joint', () => {
+    expect(slideLidFillOffsetMm(solidParams(0, { height: 1 }))).toBeNull();
+  });
+
+  it('has no answer when the plan refuses for a reason the fill does not touch', () => {
+    const masked = solidParams(0, {
+      width: 3,
+      cellMask: { cols: 3, rows: 2, cells: [1, 1, 1, 1, 1, 0] },
+    });
+    expect(slideLidFillOffsetMm(masked)).toBeNull();
+  });
+
+  it('has no answer for a hollow bin', () => {
+    expect(slideLidFillOffsetMm(slideParams())).toBeNull();
   });
 });
