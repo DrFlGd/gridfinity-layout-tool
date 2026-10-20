@@ -47,9 +47,9 @@ can differ, so exercise geometry exporters on each OS before distribution.
 
 ## Releases
 
-`.github/workflows/desktop.yml` checks the desktop build on pull requests
-(Linux), and builds Windows NSIS, macOS DMG (ARM + Intel), and Linux DEB/AppImage
-on changes to the desktop integration on `main`. Once all four jobs succeed,
+`.github/workflows/desktop.yml` checks all four desktop build targets on pull requests and builds
+Windows NSIS, macOS DMG (ARM + Intel), and Linux DEB/AppImage on changes
+to the desktop integration on `main`. Once all four jobs succeed,
 the workflow publishes the draft `desktop-v<package version>` GitHub Release.
 `workflow_dispatch` can also initiate a build from `main` when upstream web
 content changes; bump `package.json` before publishing a *new* desktop
