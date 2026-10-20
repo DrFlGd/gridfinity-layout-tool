@@ -116,3 +116,8 @@ public/models/tasks-vision/
 # which contributors symlink to CLAUDE.md so the two agents cannot drift apart.
 .commandcode/
 /AGENTS.md
+
+# Generated local Tauri build outputs; icons are created from the checked-in PWA art.
+/src-tauri/target/
+/src-tauri/gen/
+/src-tauri/icons/
