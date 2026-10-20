@@ -69,10 +69,20 @@ jobs:
       - name: Generate native app icons from existing website icon
         run: pnpm desktop:icons
 
+      # The regular pull_request GITHUB_TOKEN is read-only. The release App
+      # token already used by release.yml is required only for main builds.
+      - name: Generate release token
+        if: github.event_name != 'pull_request'
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Build Tauri application
         uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
           APPLE_SIGNING_IDENTITY: '-'
         with:
           tauriScript: pnpm dlx @tauri-apps/cli@2
@@ -89,9 +99,15 @@ jobs:
     needs: build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Generate release token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: Publish only after every platform build succeeds
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           VERSION=$(node -p "require('./package.json').version")
           gh release edit "desktop-v${VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false
