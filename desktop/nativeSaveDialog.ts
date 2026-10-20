@@ -20,8 +20,9 @@ export function installNativeSaveDialog(): () => void {
   if (!invoke) return () => {};
 
   const blobs = new Map<string, Blob>();
-  const createObjectURL = URL.createObjectURL;
-  const revokeObjectURL = URL.revokeObjectURL;
+  const createObjectURL = URL.createObjectURL.bind(URL);
+  const revokeObjectURL = URL.revokeObjectURL.bind(URL);
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- called with the original anchor via .call(this).
   const click = HTMLAnchorElement.prototype.click;
 
   URL.createObjectURL = function (object: Blob | MediaSource): string {
