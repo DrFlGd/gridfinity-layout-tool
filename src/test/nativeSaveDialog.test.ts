@@ -13,8 +13,8 @@ type DesktopTestWindow = Window & {
 const desktopWindow = window as DesktopTestWindow;
 let cleanup: () => void;
 let invoke: ReturnType<typeof vi.fn>;
-let createObjectURL: ReturnType<typeof vi.fn>;
-let revokeObjectURL: ReturnType<typeof vi.fn>;
+let createObjectURL: typeof URL.createObjectURL;
+let revokeObjectURL: typeof URL.revokeObjectURL;
 let nativeClick: ReturnType<typeof vi.spyOn>;
 const realCreateObjectURL = URL.createObjectURL;
 const realRevokeObjectURL = URL.revokeObjectURL;
@@ -22,8 +22,8 @@ const realRevokeObjectURL = URL.revokeObjectURL;
 beforeEach(() => {
   invoke = vi.fn().mockResolvedValue(true);
   desktopWindow.__TAURI__ = { core: { invoke } };
-  createObjectURL = vi.fn().mockReturnValue('blob:desktop-export');
-  revokeObjectURL = vi.fn();
+  createObjectURL = vi.fn((_object: Blob | MediaSource) => 'blob:desktop-export');
+  revokeObjectURL = vi.fn((_url: string) => {});
   URL.createObjectURL = createObjectURL;
   URL.revokeObjectURL = revokeObjectURL;
   nativeClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
