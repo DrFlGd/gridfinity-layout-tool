@@ -32,6 +32,28 @@ function desktopPwaStub(): Plugin {
   };
 }
 
+// Inject before the upstream React entry so every synthetic Blob download
+// uses Windows Save As, without patching the website's export code.
+function desktopSaveDialogEntry(): Plugin {
+  return {
+    name: 'desktop-native-save-dialog',
+    // Must run before Vite's HTML processing so the TypeScript entry is
+    // bundled into dist (post-transform injection leaves a broken .ts URL).
+    transformIndexHtml: {
+      order: 'pre',
+      handler() {
+        return [
+          {
+            tag: 'script',
+            attrs: { type: 'module', src: '/desktop/nativeEntry.ts' },
+            injectTo: 'head-prepend' as const,
+          },
+        ];
+      },
+    },
+  };
+}
+
 function withoutPwa(plugins: PluginOption[]): PluginOption[] {
   return plugins.flatMap((plugin) => {
     if (Array.isArray(plugin)) return withoutPwa(plugin);
@@ -53,7 +75,7 @@ export default defineConfig({
   // Absolute URLs already used by the app resolve against Tauri's local origin.
   base: '/',
   // Reuse upstream transforms, chunks, asset handling and content routes.
-  plugins: [desktopPwaStub(), ...withoutPwa(webConfig.plugins ?? [])],
+  plugins: [desktopPwaStub(), desktopSaveDialogEntry(), ...withoutPwa(webConfig.plugins ?? [])],
   // The self-hosted build path omits cloud sign-in checks and analytics.
   // Explicit define keeps this behavior when run outside GitHub Actions.
   define: {

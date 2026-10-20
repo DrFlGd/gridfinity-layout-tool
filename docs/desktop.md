@@ -41,9 +41,16 @@ and to **download** an installer, but not to use the installed application.
 The Tauri config reads `version` from the root `package.json` so upstream
 version bumps propagate automatically. COOP/COEP response headers on the
 bundled protocol match the website's requirement for WASM/worker isolation.
-The native app deliberately adds no filesystem, shell or HTTP Tauri plugins;
-exports use existing browser download behavior. Platform webview behavior
-can differ, so exercise geometry exporters on each OS before distribution.
+Desktop exports now open a native Windows **Save As** dialog, preserving the
+filename and extension suggested by the web exporter. A small desktop-only
+bridge holds each generated Blob while the dialog is open (the upstream website
+normally revokes its download URLs immediately). The Rust command accepts raw
+binary IPC bytes and writes only to the path picked by the user; Cancel writes
+nothing. A write error is shown to the user. Web builds continue downloading
+normally, without a dialog. Local layout saves still use the app's private
+IndexedDB/localStorage profile and never open Save As.
+Platform webview behavior can differ, so exercise geometry exporters on each OS
+before distribution.
 
 ## Releases
 
@@ -56,8 +63,6 @@ Once the Windows job succeeds, it publishes the draft
 content changes; bump `package.json` before publishing a *new* desktop
 version. This uses a separate tag namespace from upstream web releases.
 Windows installers include the offline WebView2 installer (larger download).
-macOS packages are not notarized without signing credentials; users may
-encounter Gatekeeper warnings until code signing is configured.
 
 Native builds require GitHub-hosted runners and cannot be verified solely by
 reviewing the sources. Always verify the Windows installer job and release publication before treating a release as

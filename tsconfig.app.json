@@ -29,7 +29,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"],
+  "include": ["src", "desktop/nativeSaveDialog.ts", "desktop/nativeEntry.ts"],
   "exclude": [
     "src/test",
     "**/__tests__/**",
