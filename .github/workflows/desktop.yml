@@ -23,7 +23,8 @@ permissions:
 
 concurrency:
   group: desktop-${{ github.ref }}
-  cancel-in-progress: false
+  # Cancel outdated PR builds; never interrupt a main-branch release.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
