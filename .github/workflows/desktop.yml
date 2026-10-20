@@ -24,7 +24,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: desktop-${{ github.ref }}
+  group: desktop-windows-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
