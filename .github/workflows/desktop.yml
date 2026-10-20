@@ -27,8 +27,7 @@ concurrency:
 
 jobs:
   build:
-    # One native smoke build for PRs, full installable matrix for releases.
-    if: ${{ github.event_name != 'pull_request' || matrix.platform == 'ubuntu-22.04' }}
+    # Validate every native target in PRs before allowing a desktop release.
     strategy:
       fail-fast: false
       matrix:
