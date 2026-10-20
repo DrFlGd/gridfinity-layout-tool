@@ -37,14 +37,19 @@ function desktopPwaStub(): Plugin {
 function desktopSaveDialogEntry(): Plugin {
   return {
     name: 'desktop-native-save-dialog',
-    transformIndexHtml() {
-      return [
-        {
-          tag: 'script',
-          attrs: { type: 'module', src: '/desktop/nativeEntry.ts' },
-          injectTo: 'head-prepend' as const,
-        },
-      ];
+    // Must run before Vite's HTML processing so the TypeScript entry is
+    // bundled into dist (post-transform injection leaves a broken .ts URL).
+    transformIndexHtml: {
+      order: 'pre',
+      handler() {
+        return [
+          {
+            tag: 'script',
+            attrs: { type: 'module', src: '/desktop/nativeEntry.ts' },
+            injectTo: 'head-prepend' as const,
+          },
+        ];
+      },
     },
   };
 }
