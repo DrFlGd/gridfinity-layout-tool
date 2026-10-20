@@ -47,10 +47,11 @@ can differ, so exercise geometry exporters on each OS before distribution.
 
 ## Releases
 
-`.github/workflows/desktop.yml` checks all four desktop build targets on pull requests and builds
-Windows NSIS, macOS DMG (ARM + Intel), and Linux DEB/AppImage on changes
-to the desktop integration on `main`. Once all four jobs succeed,
-the workflow publishes the draft `desktop-v<package version>` GitHub Release.
+`.github/workflows/desktop.yml` validates the Windows NSIS installer on pull
+requests. After a desktop integration change lands on `main`, the workflow
+builds one Windows x64 NSIS installer with WebView2 bundled for offline setup.
+Once the Windows job succeeds, it publishes the draft
+`desktop-v<package version>` GitHub Release.
 `workflow_dispatch` can also initiate a build from `main` when upstream web
 content changes; bump `package.json` before publishing a *new* desktop
 version. This uses a separate tag namespace from upstream web releases.
@@ -59,6 +60,6 @@ macOS packages are not notarized without signing credentials; users may
 encounter Gatekeeper warnings until code signing is configured.
 
 Native builds require GitHub-hosted runners and cannot be verified solely by
-reviewing the sources. Always check all build jobs before treating a release as
+reviewing the sources. Always verify the Windows installer job and release publication before treating a release as
 ready. No in-app auto-updater is enabled; install a newer desktop release
 manually when desired.
