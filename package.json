@@ -24,6 +24,9 @@
     "threejs"
   ],
   "scripts": {
+    "desktop:icons": "pnpm dlx @tauri-apps/cli@2 icon public/icons/icon-512.png -o src-tauri/icons",
+    "desktop:dev": "pnpm run build:content && pnpm run build:en-locale && vite --mode desktop --config desktop/vite.config.ts",
+    "desktop:build": "pnpm run build:content && pnpm run build:en-locale && tsgo -b && vite build --mode desktop --config desktop/vite.config.ts && tsx scripts/build-route-entries.ts",
     "dev": "pnpm run build:content && pnpm run build:en-locale && vite",
     "build": "pnpm run build:content && pnpm run build:en-locale && tsgo -b && vite build && tsx scripts/build-route-entries.ts",
     "build:content": "tsx scripts/build-content.ts",

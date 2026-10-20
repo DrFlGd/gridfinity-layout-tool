@@ -1,0 +1,98 @@
+name: Desktop (Tauri)
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'src-tauri/**'
+      - 'docs/desktop.md'
+      - 'package.json'
+      - '.github/workflows/desktop.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'src-tauri/**'
+      - 'docs/desktop.md'
+      - 'package.json'
+      - '.github/workflows/desktop.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # One native smoke build for PRs, full installable matrix for releases.
+    if: ${{ github.event_name != 'pull_request' || matrix.platform == 'ubuntu-22.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: ''
+            args: '--bundles deb,appimage'
+          - platform: windows-latest
+            target: ''
+            args: '--bundles nsis'
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: '--target aarch64-apple-darwin --bundles dmg'
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin --bundles dmg'
+    runs-on: ${{ matrix.platform }}
+    env:
+      VITE_SELF_HOSTED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm and Node
+        uses: ./.github/actions/setup-pnpm
+        with:
+          node-version: '24'
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux webview dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+
+      - name: Generate native app icons from existing website icon
+        run: pnpm desktop:icons
+
+      - name: Build Tauri application
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          tauriScript: pnpm dlx @tauri-apps/cli@2
+          args: ${{ matrix.args }}
+          tagName: ${{ github.event_name == 'pull_request' && '' || 'desktop-v__VERSION__' }}
+          releaseName: 'Gridfinity Layout Tool Desktop v__VERSION__'
+          releaseBody: 'Offline installers for Windows, macOS and Linux. See docs/desktop.md for limitations and setup.'
+          releaseDraft: true
+          prerelease: false
+
+  publish:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish only after every platform build succeeds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          gh release edit "desktop-v${VERSION}" --repo "${GITHUB_REPOSITORY}" --draft=false
