@@ -1,0 +1,58 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DrFlGd/Generator-Library/main/schema/collection.schema.json",
+  "id": "gridfinity",
+  "name": "Gridfinity Layout Tool",
+  "defaults": {
+    "process": "3d-print",
+    "license": "AGPL-3.0-only",
+    "tags": ["gridfinity", "organizer"],
+    "upstream": "andymai/gridfinity-layout-tool",
+    "homepage": "https://gridfinitylayouttool.com",
+    "icon": "public/icons/icon-512.png"
+  },
+  "generators": [
+    {
+      "id": "gridfinity-layout-tool",
+      "name": "Gridfinity Layout Tool",
+      "summary": "Plan and design Gridfinity drawer organizer layouts for 3D printing, with a layout planner, 3D preview and print list.",
+      "tags": ["layout", "drawers"],
+      "distributions": [
+        { "kind": "web", "url": "https://gridfinitylayouttool.com/", "label": "Open online" },
+        {
+          "kind": "exe",
+          "platform": "windows",
+          "install": "installer",
+          "label": "Install Windows app",
+          "from": { "type": "release", "tag": "desktop-v*", "asset": "*setup.exe" },
+          "notes": "Offline installer with bundled WebView2. Cloud sharing and sign-in are unavailable offline."
+        }
+      ]
+    },
+    {
+      "id": "gridfinity-bin-designer",
+      "name": "Gridfinity Bin Designer",
+      "summary": "Parametric Gridfinity bin generator with STL export.",
+      "tags": ["bins"],
+      "distributions": [
+        {
+          "kind": "web",
+          "url": "https://gridfinitylayouttool.com/designer",
+          "label": "Open online"
+        }
+      ]
+    },
+    {
+      "id": "gridfinity-baseplate-generator",
+      "name": "Gridfinity Baseplate Generator",
+      "summary": "3D-printable Gridfinity baseplates with automatic splitting and STL, STEP and 3MF export.",
+      "tags": ["baseplates"],
+      "distributions": [
+        {
+          "kind": "web",
+          "url": "https://gridfinitylayouttool.com/baseplate",
+          "label": "Open online"
+        }
+      ]
+    }
+  ]
+}
