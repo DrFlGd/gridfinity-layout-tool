@@ -1,1 +1,0 @@
-export { LidSection } from './LidSection';

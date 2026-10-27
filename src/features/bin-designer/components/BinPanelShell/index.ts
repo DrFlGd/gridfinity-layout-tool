@@ -1,1 +1,0 @@
-export { BinPanelShell } from './BinPanelShell';

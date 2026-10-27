@@ -1,1 +1,0 @@
-export { MobileAboutStrip } from './MobileAboutStrip';

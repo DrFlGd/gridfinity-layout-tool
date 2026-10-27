@@ -1,1 +1,0 @@
-export { AnimatedBinMesh } from './AnimatedBinMesh';

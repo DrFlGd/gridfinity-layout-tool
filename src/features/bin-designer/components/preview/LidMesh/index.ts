@@ -1,1 +1,0 @@
-export { LidMesh } from './LidMesh';

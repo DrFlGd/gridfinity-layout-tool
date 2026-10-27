@@ -1,1 +1,0 @@
-export { StackPlateMesh } from './StackPlateMesh';

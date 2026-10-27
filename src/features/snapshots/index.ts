@@ -1,1 +1,0 @@
-export { SnapshotHistory } from './components';

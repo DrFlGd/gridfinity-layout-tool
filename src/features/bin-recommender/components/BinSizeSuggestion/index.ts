@@ -1,1 +1,0 @@
-export { BinSizeSuggestion } from './BinSizeSuggestion';

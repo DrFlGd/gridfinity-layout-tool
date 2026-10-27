@@ -1,2 +1,0 @@
-# Block source maps from production deployment
-dist/**/*.map

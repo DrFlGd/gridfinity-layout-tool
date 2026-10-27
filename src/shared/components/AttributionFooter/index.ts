@@ -1,1 +1,0 @@
-export { AttributionFooter } from './AttributionFooter';

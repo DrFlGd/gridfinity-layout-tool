@@ -1,1 +1,0 @@
-export { GhostCutouts } from './GhostCutouts';

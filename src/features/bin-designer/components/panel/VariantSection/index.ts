@@ -1,1 +1,0 @@
-export { VariantSection } from './VariantSection';

@@ -1,1 +1,0 @@
-export { SlantSupportWedges } from './SlantSupportWedges';

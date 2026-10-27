@@ -1,1 +1,0 @@
-export { STLSearchDropdown } from './STLSearchDropdown';

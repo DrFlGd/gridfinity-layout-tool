@@ -1,1 +1,0 @@
-export { DrawerDimensionsSummary } from './DrawerDimensionsSummary';

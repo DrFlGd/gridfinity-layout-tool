@@ -1,1 +1,0 @@
-export { LabelPlateMeshes } from './LabelPlateMeshes';

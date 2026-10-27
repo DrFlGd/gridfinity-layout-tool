@@ -1,1 +1,0 @@
-export { InteriorFilletSection } from './InteriorFilletSection';
