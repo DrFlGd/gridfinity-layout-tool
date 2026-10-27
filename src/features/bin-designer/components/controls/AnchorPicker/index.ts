@@ -1,1 +1,0 @@
-export { AnchorPicker } from './AnchorPicker';

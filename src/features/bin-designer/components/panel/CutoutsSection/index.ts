@@ -1,1 +1,0 @@
-export { CutoutsSection } from './CutoutsSection';

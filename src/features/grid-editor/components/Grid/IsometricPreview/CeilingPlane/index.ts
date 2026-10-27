@@ -1,1 +1,0 @@
-export { CeilingPlane } from './CeilingPlane';

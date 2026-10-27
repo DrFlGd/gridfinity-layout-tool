@@ -1,82 +1,15 @@
-<div align="center">
+# Gridfinity Layout Tool: offline builds
 
-# Gridfinity Layout Tool
+This fork builds [andymai/gridfinity-layout-tool](https://github.com/andymai/gridfinity-layout-tool) releases as offline web bundles for [Generator Library](https://github.com/DrFlGd/Generator-Library). Nothing of the app's source lives here; every build comes straight from an upstream release tag.
 
-[![CI](https://github.com/andymai/gridfinity-layout-tool/actions/workflows/ci.yml/badge.svg)](https://github.com/andymai/gridfinity-layout-tool/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/andymai/gridfinity-layout-tool)](https://github.com/andymai/gridfinity-layout-tool/releases)
-[![Last release](https://img.shields.io/github/release-date/andymai/gridfinity-layout-tool?label=last%20release)](https://github.com/andymai/gridfinity-layout-tool/releases)
-[![Commit activity](https://img.shields.io/github/commit-activity/m/andymai/gridfinity-layout-tool?label=commits%2Fmonth)](https://github.com/andymai/gridfinity-layout-tool/commits/main)
-[![License: AGPL-3.0](https://img.shields.io/github/license/andymai/gridfinity-layout-tool)](./LICENSE)
+- `.github/workflows/library-bundles.yml` runs daily (or by hand with a tag). It builds the newest upstream release with `VITE_SELF_HOSTED=1` and publishes it as an `upstream-<version>` release with one `gridfinity-layout-tool-web-<version>.zip`. The newest 15 builds are kept.
+- `scripts/vendor-unicode-fonts.mjs` copies the fonts the 3D labels use into the build, so the bin designer loads without an internet connection.
+- `generator.json` tells Generator Library how to list and install it.
 
-Plan and design [Gridfinity](https://www.youtube.com/c/ZackFreedman) drawer organizer layouts for 3D printing — right in your browser.
+In the offline copy, the layout planner, bin designer, baseplate generator and STL/STEP/3MF export work as on the website. Sign-in, sharing, sync and community designs need the online site.
 
-### → [**gridfinitylayouttool.com**](https://gridfinitylayouttool.com)
-
-</div>
-
-<img width="1436" height="847" alt="image" src="https://github.com/user-attachments/assets/17dba424-3a01-4064-b3e9-7742687fc2d5" />
-
----
-
-<img width="1436" height="844" alt="image" src="https://github.com/user-attachments/assets/30230ac3-bdac-4dcc-83ab-c13b0f40739d" />
-
----
-
-<img width="1232" height="848" alt="image" src="https://github.com/user-attachments/assets/51db8aaa-8598-4b82-94ce-04f5289a9106" />
-
-## Features
-
-- **Layout Planner** — Drag-and-drop bin placement with stacked layers and color-coded categories
-- **3D Preview** — Isometric visualization of your drawer layout
-- **Bin Designer** — Parametric 3D bin generator with STL export
-- **Baseplate Generator** — 3D-printable Gridfinity baseplates with automatic splitting and STL / STEP / 3MF export
-- **Print List** — Optimized print list with filament, time, and cost estimates
-- **Inspiration Gallery** — Browse curated example layouts across workshop, kitchen, office, hobby, and personal themes
-- **Cloud Sharing** — Share layouts via link with optional real-time collaboration
-- **Cloud Sync** — Sign in with Google or GitHub to sync your layouts and bin designs across devices
-- **PWA** — Installable, works offline
-
-## Scope
-
-To set expectations, this tool deliberately does not:
-
-- **Slice models for printing** — export STL / STEP / 3MF and slice in Bambu Studio, PrusaSlicer, OrcaSlicer, etc.
-- **Replace general-purpose CAD** — the Bin Designer is parametric but stays within the Gridfinity spec; for arbitrary shapes use Fusion, OpenSCAD, etc.
-- **Require accounts** — layouts live in your browser by default; signing in for Cloud Sync and link-based sharing are both opt-in
-- **Support legacy browsers** — needs a modern browser with WebGL support
-
-## Built With
-
-- **[brepjs](https://github.com/andymai/brepjs)** — Parametric 3D geometry & STL export (OpenCascade WASM)
-- **[Three.js](https://threejs.org)** — 3D visualization
-
-## Local Development
-
-Requires **Node.js 24+** and **pnpm 11+**. Use `nvm use` to switch to the correct version (requires [nvm](https://github.com/nvm-sh/nvm)).
-
-```bash
-git clone https://github.com/andymai/gridfinity-layout-tool.git
-cd gridfinity-layout-tool
-nvm use
-pnpm install
-pnpm run dev           # Development server at localhost:5173
-pnpm run build         # Production build
-pnpm run test:coverage # Unit tests with coverage
-pnpm run test:e2e      # Playwright end-to-end tests
-```
-
-## Self-Hosting
-
-```bash
-docker run -d -p 8080:8080 ghcr.io/andymai/gridfinity-layout-tool:latest
-```
-
-The image serves the whole planner, designer and every exporter from your own machine; features that need the cloud backend (sharing by link, sign-in, community) stay off. See [docs/self-hosting.md](./docs/self-hosting.md) for Compose, reverse proxies, updating and building from source.
-
-## Contributing
-
-This project is open source but not open contribution — see [CONTRIBUTING.md](./CONTRIBUTING.md) for details on bug reports, feature requests, and the pull request policy.
+The earlier Tauri desktop build is kept on the `archive/desktop-tauri` branch and its `desktop-v*` releases.
 
 ## License
 
-[GNU Affero General Public License v3.0](./LICENSE) — see the LICENSE file for details.
+AGPL-3.0, as upstream. Each release links to the exact upstream source it was built from.

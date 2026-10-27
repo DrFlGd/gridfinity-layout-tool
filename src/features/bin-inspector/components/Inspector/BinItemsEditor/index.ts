@@ -1,1 +1,0 @@
-export { BinItemsEditor } from './BinItemsEditor';

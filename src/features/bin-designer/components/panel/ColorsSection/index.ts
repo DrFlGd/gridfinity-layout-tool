@@ -1,1 +1,0 @@
-export { ColorsSection } from './ColorsSection';

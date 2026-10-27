@@ -1,1 +1,0 @@
-export { SlantSupportMesh } from './SlantSupportMesh';

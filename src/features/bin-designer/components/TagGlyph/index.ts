@@ -1,1 +1,0 @@
-export { TagGlyph } from './TagGlyph';

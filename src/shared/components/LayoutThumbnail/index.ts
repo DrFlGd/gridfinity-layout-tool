@@ -1,1 +1,0 @@
-export { LayoutThumbnail } from './LayoutThumbnail';

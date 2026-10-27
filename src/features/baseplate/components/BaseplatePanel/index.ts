@@ -1,1 +1,0 @@
-export { BaseplatePanel } from './BaseplatePanel';

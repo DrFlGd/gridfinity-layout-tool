@@ -1,1 +1,0 @@
-export { GhostWallCutouts } from './GhostWallCutouts';

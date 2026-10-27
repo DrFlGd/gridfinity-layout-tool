@@ -1,1 +1,0 @@
-export { TagFilterBar } from './TagFilterBar';

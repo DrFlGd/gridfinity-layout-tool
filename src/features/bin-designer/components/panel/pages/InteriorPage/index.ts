@@ -1,1 +1,0 @@
-export { InteriorPage } from './InteriorPage';

@@ -1,1 +1,0 @@
-export { PaddingAnchor } from './PaddingAnchor';

@@ -1,1 +1,0 @@
-export { KnifeRestMesh } from './KnifeRestMesh';

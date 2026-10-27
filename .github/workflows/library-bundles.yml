@@ -1,0 +1,116 @@
+name: Library bundles
+
+# Builds releases of andymai/gridfinity-layout-tool as offline web bundles for
+# Generator Library. Each upstream release becomes an `upstream-<version>`
+# release here with one zip that the library unpacks and serves locally.
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to build (default the newest gridfinity-layout-tool-v* tag)
+        required: false
+      force:
+        description: Rebuild even if the release already exists
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: library-bundles
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: andymai/gridfinity-layout-tool
+  KEEP_RELEASES: 15
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Pick the upstream release
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if [ -z "$TAG" ]; then
+            TAG=$(git ls-remote --tags --sort=-v:refname "https://github.com/$UPSTREAM" 'gridfinity-layout-tool-v*' \
+              | grep -v '\^{}' | head -1 | sed 's#.*refs/tags/##')
+          fi
+          [ -n "$TAG" ] || { echo "No upstream tag found"; exit 1; }
+          VERSION="${TAG#gridfinity-layout-tool-}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "upstream-$VERSION" > /dev/null 2>&1; then
+            echo "upstream-$VERSION already published"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v5
+        if: steps.pick.outputs.skip != 'true'
+        with:
+          repository: ${{ env.UPSTREAM }}
+          ref: ${{ steps.pick.outputs.tag }}
+          path: upstream
+
+      - uses: actions/setup-node@v5
+        if: steps.pick.outputs.skip != 'true'
+        with:
+          node-version: 24
+
+      - name: Build
+        if: steps.pick.outputs.skip != 'true'
+        working-directory: upstream
+        # VITE_SELF_HOSTED is upstream's own switch for builds served outside its
+        # site: no analytics and no sign-in probe.
+        env:
+          VITE_SELF_HOSTED: '1'
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+          pnpm run build
+
+      - name: Make the 3D labels work offline
+        if: steps.pick.outputs.skip != 'true'
+        run: node scripts/vendor-unicode-fonts.mjs upstream/dist
+
+      - name: Zip
+        if: steps.pick.outputs.skip != 'true'
+        id: zip
+        run: |
+          find upstream/dist -name '*.map' -delete
+          NAME="gridfinity-layout-tool-web-${{ steps.pick.outputs.version }}.zip"
+          (cd upstream/dist && zip -qr "$GITHUB_WORKSPACE/$NAME" .)
+          ls -lh "$NAME"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: steps.pick.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pick.outputs.tag }}
+          VERSION: ${{ steps.pick.outputs.version }}
+          ZIP: ${{ steps.zip.outputs.name }}
+        run: |
+          NOTES="Offline web build of [$UPSTREAM@$TAG](https://github.com/$UPSTREAM/releases/tag/$TAG) for Generator Library.
+
+          Built with \`VITE_SELF_HOSTED=1\` and the 3D label fonts copied in by \`scripts/vendor-unicode-fonts.mjs\`; source: https://github.com/$UPSTREAM/tree/$TAG. Sign-in, sharing and community features need the online site."
+          gh release delete "upstream-$VERSION" --yes --cleanup-tag 2> /dev/null || true
+          gh release create "upstream-$VERSION" "$ZIP" --target "$GITHUB_SHA" \
+            --title "Gridfinity Layout Tool $VERSION (offline)" --notes "$NOTES"
+
+      - name: Keep the newest ${{ env.KEEP_RELEASES }} builds
+        if: steps.pick.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("upstream-"))] | sort_by(.createdAt) | reverse | .[env.KEEP_RELEASES | tonumber:] | .[].tagName' \
+            | while read -r old; do gh release delete "$old" --yes --cleanup-tag; done
